@@ -68,9 +68,11 @@ class PlaybackService : MediaSessionService() {
         session = MediaSession.Builder(this, exo)
             .setCallback(object : MediaSession.Callback {
                 override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-                    if (!controller.isTrusted) return MediaSession.ConnectionResult.reject()
                     val accepted = super.onConnect(session, controller)
+                    // The in-app MediaController is the same UID and is not "trusted"
+                    // (that flag is for MEDIA_CONTENT_CONTROL / notification listeners).
                     if (controller.uid == android.os.Process.myUid()) return accepted
+                    if (!controller.isTrusted) return MediaSession.ConnectionResult.reject()
                     // System controls can operate playback, but cannot inject arbitrary URLs/files.
                     return MediaSession.ConnectionResult.accept(
                         accepted.availableSessionCommands,
