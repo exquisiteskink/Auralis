@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Homelab Navidrome/Subsonic servers often run HTTP on LAN.
-         Credentials are still sent as a salted token (never plaintext). -->
+    <!-- Cleartext is platform-permitted so LAN HTTP can work; the app rejects
+         HTTP except localhost / .local / private IP ranges. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Auralis</string>
+    <string name="playback_channel">Auralis playback</string>
     <string name="nav_home">Home</string>
     <string name="nav_artists">Artists</string>
     <string name="nav_search">Search</string>

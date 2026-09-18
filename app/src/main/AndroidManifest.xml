@@ -25,6 +25,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:label="@string/app_name"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Auralis">
             <intent-filter>
@@ -36,6 +37,7 @@
         <service
             android:name=".data.player.PlaybackService"
             android:exported="false"
+            android:label="@string/app_name"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />

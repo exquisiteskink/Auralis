@@ -17,6 +17,8 @@ class AuralisApp : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
             .okHttpClient(container.client.http)
+            // Authenticated artwork URLs can contain API keys or encoded passwords.
+            .diskCachePolicy(coil.request.CachePolicy.DISABLED)
             .crossfade(true)
             .build()
 

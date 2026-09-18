@@ -2,6 +2,7 @@ package app.auralis.music.ui.theme
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -30,14 +32,14 @@ val LocalPlayer = staticCompositionLocalOf<PlayerController> { error("PlayerCont
 val LocalContainer = staticCompositionLocalOf<AppContainer> { error("AppContainer not provided") }
 
 private val AuralisTypography = Typography(
-    displayLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 40.sp, letterSpacing = (-0.5).sp),
-    headlineLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 28.sp, letterSpacing = (-0.3).sp),
-    headlineMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 22.sp),
+    displayLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 34.sp, letterSpacing = (-0.4).sp),
+    headlineLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 26.sp, letterSpacing = (-0.2).sp),
+    headlineMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
     titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 18.sp),
     titleMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 16.sp),
     bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 22.sp),
     bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp),
-    labelLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = 13.sp, letterSpacing = 0.2.sp),
+    labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 0.8.sp),
 )
 
 enum class ThemeMode { System, Dark, Light }
@@ -77,31 +79,75 @@ fun AuralisTheme(
             surfaceVariant = palette.surfaceHigh,
         )
     }
-    val top = animateColorAsState(palette.gradientTop, tween(700), label = "gradTop")
-    val bottom = animateColorAsState(palette.gradientBottom, tween(700), label = "gradBottom")
+    val a = animateColorAsState(palette.blurA, tween(700), label = "blurA")
+    val b = animateColorAsState(palette.blurB, tween(700), label = "blurB")
+    val c = animateColorAsState(palette.blurC, tween(700), label = "blurC")
     val bg = animateColorAsState(palette.background, tween(700), label = "bg")
 
     CompositionLocalProvider(LocalPalette provides palette) {
         MaterialTheme(colorScheme = scheme, typography = AuralisTypography) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(bg.value)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                top.value.copy(alpha = 0.92f),
-                                bg.value.copy(alpha = 0.85f),
-                                bottom.value,
-                            ),
-                        ),
-                    ),
-            ) {
+            Box(Modifier.fillMaxSize().background(bg.value)) {
+                UltraBlurLayer(
+                    blurA = a.value,
+                    blurB = b.value,
+                    blurC = c.value,
+                    dark = dark,
+                )
                 content()
             }
         }
     }
 }
 
-fun Color.glass(dark: Boolean, extra: Float = 0f): Color =
-    if (dark) Color.White.copy(alpha = 0.08f + extra) else Color.White.copy(alpha = 0.55f + extra)
+@Composable
+fun UltraBlurLayer(
+    blurA: Color,
+    blurB: Color,
+    blurC: Color,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val r = maxOf(w, h)
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(blurA.copy(alpha = if (dark) 0.90f else 0.88f), Color.Transparent),
+                center = Offset(w * 0.18f, h * 0.12f),
+                radius = r * 0.85f,
+            ),
+        )
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(blurB.copy(alpha = if (dark) 0.75f else 0.80f), Color.Transparent),
+                center = Offset(w * 0.92f, h * 0.38f),
+                radius = r * 0.80f,
+            ),
+        )
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(blurC.copy(alpha = if (dark) 0.88f else 0.86f), Color.Transparent),
+                center = Offset(w * 0.45f, h * 1.05f),
+                radius = r * 0.95f,
+            ),
+        )
+        drawRect(
+            Brush.radialGradient(
+                colors = listOf(blurA.copy(alpha = if (dark) 0.40f else 0.50f), Color.Transparent),
+                center = Offset(w * 0.70f, h * 0.08f),
+                radius = r * 0.45f,
+            ),
+        )
+        drawRect(Color.Black.copy(alpha = if (dark) 0.28f else 0.06f))
+    }
+}
+
+@Composable
+fun UltraBlurBackground(modifier: Modifier = Modifier) {
+    val p = LocalPalette.current
+    Box(modifier) {
+        Box(Modifier.fillMaxSize().background(p.background))
+        UltraBlurLayer(p.blurA, p.blurB, p.blurC, p.isDark, Modifier.fillMaxSize())
+    }
+}

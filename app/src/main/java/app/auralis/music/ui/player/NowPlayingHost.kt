@@ -1,34 +1,33 @@
 package app.auralis.music.ui.player
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -37,34 +36,38 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.lerp
 import androidx.media3.common.Player
 import app.auralis.music.data.player.PlayerUiState
 import app.auralis.music.data.remote.formatDurationMs
@@ -72,290 +75,201 @@ import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
+import app.auralis.music.ui.theme.UltraBlurBackground
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.math.roundToInt
-
-enum class PlayerSheet { Mini, Expanded, Queue }
 
 @Composable
 fun NowPlayingHost(
-    sheet: androidx.compose.runtime.MutableState<Float>,
+    sheet: MutableState<Float>,
     onArtist: (String) -> Unit,
     bottomNavVisible: Boolean,
 ) {
     val player = LocalPlayer.current
     val ui by player.state.collectAsState()
     val song = ui.current ?: return
-    val p = LocalPalette.current
     val scope = rememberCoroutineScope()
-    val haptics = LocalHapticFeedback.current
-    val progress = remember { Animatable(sheet.value) }
-    val updatedNav = rememberUpdatedState(bottomNavVisible)
+    val density = LocalDensity.current
+    val navVisible = rememberUpdatedState(bottomNavVisible)
 
-    LaunchedEffect(sheet.value) {
-        if (abs(progress.value - sheet.value) > 0.01f) {
-            progress.snapTo(sheet.value)
+    var expand by remember { mutableFloatStateOf(sheet.value.coerceIn(0f, 1f)) }
+    var queue by remember { mutableFloatStateOf(0f) }
+    val expandAnim = remember { Animatable(expand) }
+    val queueAnim = remember { Animatable(0f) }
+    var settleJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(expand) { sheet.value = expand }
+
+    fun cancelSettle() {
+        settleJob?.cancel()
+        settleJob = null
+    }
+
+    fun settleExpand(target: Float) {
+        cancelSettle()
+        val dest = target.coerceIn(0f, 1f)
+        settleJob = scope.launch {
+            expandAnim.snapTo(expand)
+            expandAnim.animateTo(dest, spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) {
+                expand = value
+            }
+            expand = dest
+            if (dest == 0f) {
+                queue = 0f
+                queueAnim.snapTo(0f)
+            }
         }
     }
 
-    fun setProgress(value: Float) {
-        sheet.value = value
+    fun settleQueue(target: Float) {
+        cancelSettle()
+        val dest = target.coerceIn(0f, 1f)
+        settleJob = scope.launch {
+            queueAnim.snapTo(queue)
+            queueAnim.animateTo(dest, spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) {
+                queue = value
+            }
+            queue = dest
+        }
     }
 
-    suspend fun snapTo(target: Float) {
-        val dest = target.coerceIn(0f, 2f)
-        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        progress.animateTo(
-            dest,
-            spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
-        )
-        setProgress(dest)
+    BackHandler(enabled = expand > 0.2f) {
+        if (queue > 0.4f) settleQueue(0f) else settleExpand(0f)
     }
-
-    val expand = progress.value.coerceIn(0f, 1f)
-    val queueT = (progress.value - 1f).coerceIn(0f, 1f)
-    val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val statusInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val navReserve = if (updatedNav.value) 80.dp else 0.dp
-    val density = LocalDensity.current
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val fullH = maxHeight
-        val miniH = 64.dp
-        val height = androidx.compose.ui.unit.lerp(miniH, fullH, expand)
-        val bottomPad = androidx.compose.ui.unit.lerp(navReserve + navInset, 0.dp, expand)
-        val radius = androidx.compose.ui.unit.lerp(18.dp, 0.dp, expand)
-        val pxPerUnit = with(density) { (fullH - miniH).toPx() }.coerceAtLeast(1f)
+        val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val fling = with(density) { 900.dp.toPx() }
 
-        Box(
-            Modifier
-                .fillMaxSize()
-                .alpha(expand * 0.55f)
-                .background(p.scrim)
-                .then(if (expand > 0.05f) Modifier.clickable { scope.launch { snapTo(0f) } } else Modifier),
-        )
+        val overlayDrag = rememberDraggableState { delta ->
+            cancelSettle()
+            if (expand > 0.97f && (queue > 0.02f || delta < 0f)) {
+                queue = (queue - delta / heightPx).coerceIn(0f, 1f)
+            } else {
+                expand = (expand - delta / heightPx).coerceIn(0f, 1f)
+                if (expand < 0.98f) queue = 0f
+            }
+        }
 
-        Box(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottomPad, start = androidx.compose.ui.unit.lerp(10.dp, 0.dp, expand), end = androidx.compose.ui.unit.lerp(10.dp, 0.dp, expand))
-                .fillMaxWidth()
-                .height(height)
-                .graphicsLayer {
-                    shadowElevation = lerp(8f, 0f, expand)
-                    shape = RoundedCornerShape(radius)
-                    clip = true
+        val miniDrag = rememberDraggableState { delta ->
+            cancelSettle()
+            expand = (expand - delta / heightPx).coerceIn(0f, 1f)
+        }
+
+        val queueHeaderDrag = rememberDraggableState { delta ->
+            if (delta > 0f) {
+                cancelSettle()
+                queue = (queue - delta / heightPx).coerceIn(0f, 1f)
+            }
+        }
+
+        val queueDismiss = remember(heightPx, fling) {
+            object : NestedScrollConnection {
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource,
+                ): Offset {
+                    if (available.y > 0f) {
+                        cancelSettle()
+                        queue = (queue - available.y / heightPx).coerceIn(0f, 1f)
+                        return Offset(0f, available.y)
+                    }
+                    return Offset.Zero
                 }
-                .clip(RoundedCornerShape(radius))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            p.gradientTop.copy(alpha = lerp(0.92f, 1f, expand)),
-                            p.background,
-                        ),
+
+                override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                    if (available.y > fling || queue < 0.72f) {
+                        settleQueue(if (available.y > fling || queue < 0.55f) 0f else 1f)
+                        return available
+                    }
+                    settleQueue(1f)
+                    return Velocity.Zero
+                }
+            }
+        }
+
+        if (expand < 0.98f) {
+            MiniBar(
+                ui = ui,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (navVisible.value) 80.dp else 0.dp)
+                    .navigationBarsPadding()
+                    .draggable(
+                        state = miniDrag,
+                        orientation = Orientation.Vertical,
+                        onDragStopped = { velocity ->
+                            val open = when {
+                                velocity < -fling -> true
+                                velocity > fling -> false
+                                else -> expand >= 0.18f
+                            }
+                            settleExpand(if (open) 1f else 0f)
+                        },
+                    )
+                    .clickable { settleExpand(1f) },
+                onPlayPause = { player.playPause() },
+            )
+        }
+
+        if (expand > 0.01f) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, ((1f - expand) * heightPx).toInt()) }
+                    .draggable(
+                        state = overlayDrag,
+                        orientation = Orientation.Vertical,
+                        enabled = queue < 0.35f,
+                        onDragStopped = { velocity ->
+                            if (queue > 0.03f) {
+                                val open = when {
+                                    velocity < -fling -> true
+                                    velocity > fling -> false
+                                    else -> queue >= 0.45f
+                                }
+                                settleQueue(if (open) 1f else 0f)
+                            } else {
+                                val open = when {
+                                    velocity < -fling -> true
+                                    velocity > fling -> false
+                                    else -> expand >= 0.45f
+                                }
+                                settleExpand(if (open) 1f else 0f)
+                            }
+                        },
                     ),
+            ) {
+                UltraBlurBackground(Modifier.fillMaxSize())
+                NowPlayingPage(
+                    ui = ui,
+                    onArtist = {
+                        onArtist(it)
+                        settleExpand(0f)
+                    },
+                    onClose = { settleExpand(0f) },
+                    onOpenQueue = { settleQueue(1f) },
                 )
-                .border(
-                    1.dp,
-                    Color.White.copy(alpha = lerp(0.14f, 0.04f, expand)),
-                    RoundedCornerShape(radius),
-                )
-                .then(
-                    if (queueT < 0.55f) {
-                        Modifier.pointerInput(pxPerUnit) {
-                            detectVerticalDragGestures(
-                                onVerticalDrag = { _, dragAmount ->
-                                    val delta = -dragAmount / pxPerUnit
-                                    val next = (progress.value + delta).coerceIn(0f, 2f)
-                                    scope.launch { progress.snapTo(next) }
-                                },
-                                onDragEnd = {
-                                    val v = progress.value
-                                    val target = when {
-                                        v < 0.45f -> 0f
-                                        v < 1.45f -> 1f
-                                        else -> 2f
-                                    }
-                                    scope.launch { snapTo(target) }
-                                },
-                                onDragCancel = {
-                                    val nearest = listOf(0f, 1f, 2f).minBy { abs(it - progress.value) }
-                                    scope.launch { snapTo(nearest) }
-                                },
-                            )
-                        }
-                    } else Modifier
-                )
-                .clickable(enabled = progress.value < 0.2f) { scope.launch { snapTo(1f) } },
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                if (expand > 0.2f) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = androidx.compose.ui.unit.lerp(0.dp, statusInset, expand))
-                            .alpha(expand)
-                            .pointerInput(pxPerUnit) {
-                                detectVerticalDragGestures(
-                                    onVerticalDrag = { _, dragAmount ->
-                                        val delta = -dragAmount / pxPerUnit
-                                        val next = (progress.value + delta).coerceIn(0f, 2f)
-                                        scope.launch { progress.snapTo(next) }
-                                    },
-                                    onDragEnd = {
-                                        val v = progress.value
-                                        val target = when {
-                                            v < 0.45f -> 0f
-                                            v < 1.45f -> 1f
-                                            else -> 2f
-                                        }
-                                        scope.launch { snapTo(target) }
-                                    },
-                                    onDragCancel = {
-                                        val nearest = listOf(0f, 1f, 2f).minBy { abs(it - progress.value) }
-                                        scope.launch { snapTo(nearest) }
-                                    },
-                                )
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .offset { IntOffset(0, ((1f - queue) * heightPx).toInt()) }
+                        .then(if (queue > 0.02f) Modifier.nestedScroll(queueDismiss) else Modifier),
+                ) {
+                    UltraBlurBackground(Modifier.fillMaxSize())
+                    QueuePage(
+                        ui = ui,
+                        onClose = { settleQueue(0f) },
+                        headerModifier = Modifier.draggable(
+                            state = queueHeaderDrag,
+                            orientation = Orientation.Vertical,
+                            onDragStopped = { velocity ->
+                                val close = velocity > fling || queue < 0.72f
+                                settleQueue(if (close) 0f else 1f)
                             },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        IconButton(onClick = { scope.launch { snapTo(if (queueT > 0.5f) 1f else 0f) } }) {
-                            Icon(Icons.Rounded.KeyboardArrowDown, "Close", tint = p.onBackground)
-                        }
-                        Text(
-                            if (queueT > 0.4f) "Up next" else "Now playing",
-                            color = p.onBackground.copy(alpha = 0.7f),
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 13.sp,
-                        )
-                        IconButton(onClick = { scope.launch { snapTo(if (queueT > 0.5f) 1f else 2f) } }) {
-                            Icon(Icons.Rounded.ExpandLess, "Queue", tint = p.onBackground.copy(alpha = 0.8f))
-                        }
-                    }
-                }
-
-                val art = androidx.compose.ui.unit.lerp(
-                    androidx.compose.ui.unit.lerp(52.dp, 300.dp, expand),
-                    64.dp,
-                    queueT,
-                )
-                val rowish = expand < 0.55f && queueT == 0f
-
-                if (rowish) {
-                    MiniRow(ui = ui, onPlayPause = { player.playPause() }, onNext = { player.next() })
-                } else {
-                    Column(
-                        Modifier.fillMaxWidth().weight(1f, fill = true),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        CoverArt(
-                            coverId = song.coverArt,
-                            modifier = Modifier
-                                .padding(top = 8.dp)
-                                .size(art)
-                                .graphicsLayer {
-                                    shadowElevation = lerp(0f, 24f, expand * (1f - queueT))
-                                    rotationZ = lerp(0f, 0.2f, expand)
-                                },
-                            contentDescription = song.title,
-                            corner = androidx.compose.ui.unit.lerp(10.dp, 22.dp, expand),
-                        )
-                        Spacer(Modifier.height(androidx.compose.ui.unit.lerp(8.dp, 28.dp, expand * (1f - queueT))))
-                        Text(
-                            song.title,
-                            color = p.onBackground,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = lerp(14f, 24f, expand).sp,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .padding(horizontal = 28.dp)
-                                .clickable(enabled = song.artistId != null) {
-                                    song.artistId?.let(onArtist)
-                                    scope.launch { snapTo(0f) }
-                                },
-                        )
-                        Text(
-                            song.artist.orEmpty(),
-                            color = p.onBackground.copy(alpha = 0.6f),
-                            fontSize = 15.sp,
-                            modifier = Modifier
-                                .padding(top = 4.dp)
-                                .clickable(enabled = song.artistId != null) {
-                                    song.artistId?.let(onArtist)
-                                    scope.launch { snapTo(0f) }
-                                },
-                        )
-                        song.qualityLabel?.let { q ->
-                            Text(
-                                q,
-                                color = p.primary.copy(alpha = 0.9f),
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 8.dp),
-                            )
-                        }
-
-                        if (queueT < 0.5f) {
-                            Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp).alpha(1f - queueT * 2f)) {
-                                val dur = ui.durationMs.coerceAtLeast(1L)
-                                Slider(
-                                    value = (ui.positionMs.toFloat() / dur).coerceIn(0f, 1f),
-                                    onValueChange = { player.seek((it * dur).toLong()) },
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = p.primary,
-                                        activeTrackColor = p.primary,
-                                        inactiveTrackColor = p.onBackground.copy(alpha = 0.15f),
-                                    ),
-                                )
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(formatDurationMs(ui.positionMs), color = p.onBackground.copy(alpha = 0.5f), fontSize = 12.sp)
-                                    Text(formatDurationMs(ui.durationMs), color = p.onBackground.copy(alpha = 0.5f), fontSize = 12.sp)
-                                }
-                            }
-                            ControlsRow(ui)
-                            Text(
-                                "Swipe up for the queue",
-                                color = p.onBackground.copy(alpha = 0.35f),
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 8.dp),
-                            )
-                        } else {
-                            ControlsRow(ui)
-                            LazyColumn(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                                    .alpha(queueT),
-                            ) {
-                                item {
-                                    Text(
-                                        "Up next",
-                                        color = p.onBackground,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                                    )
-                                }
-                                itemsIndexed(ui.upNext, key = { i, s -> "${s.id}-$i" }) { i, s ->
-                                    SongRow(
-                                        song = s,
-                                        onClick = { player.playFromQueue(ui.index + 1 + i) },
-                                        playing = false,
-                                    )
-                                }
-                                if (ui.upNext.isEmpty()) {
-                                    item {
-                                        Text(
-                                            "Nothing else in the queue",
-                                            color = p.onBackground.copy(alpha = 0.5f),
-                                            modifier = Modifier.padding(24.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                        ),
+                    )
                 }
             }
         }
@@ -363,42 +277,276 @@ fun NowPlayingHost(
 }
 
 @Composable
-private fun MiniRow(
+private fun NowPlayingPage(
     ui: PlayerUiState,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
+    onArtist: (String) -> Unit,
+    onClose: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
+    val player = LocalPlayer.current
     val p = LocalPalette.current
     val song = ui.current ?: return
-    Row(
-        Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 28.dp),
     ) {
-        CoverArt(song.coverArt, Modifier.size(48.dp), song.title, corner = 10.dp)
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-            Text(song.artist.orEmpty(), color = p.onBackground.copy(alpha = 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
-        }
-        IconButton(onClick = onPlayPause) {
-            Icon(
-                if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (ui.isPlaying) "Pause" else "Play",
-                tint = p.onBackground,
+        val artSize = minOf(maxWidth * 0.78f, maxHeight * 0.34f)
+        Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.weight(1f))
+            CoverArt(
+                coverId = song.coverArt,
+                modifier = Modifier
+                    .size(artSize)
+                    .shadow(18.dp, RoundedCornerShape(12.dp)),
+                contentDescription = song.title,
+                corner = 12.dp,
+            )
+
+            Spacer(Modifier.height(24.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                formatDurationMs(ui.positionMs),
+                color = p.onBackground.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.width(40.dp),
+            )
+            WaveformSeekBar(
+                positionMs = ui.positionMs,
+                durationMs = ui.durationMs,
+                seed = song.id,
+                onSeek = { ms -> player.seek(ms) },
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+            Text(
+                formatDurationMs(ui.durationMs),
+                color = p.onBackground.copy(alpha = 0.85f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.width(40.dp),
+                maxLines = 1,
             )
         }
-        IconButton(onClick = onNext) {
-            Icon(Icons.Rounded.SkipNext, contentDescription = "Next", tint = p.onBackground)
+
+        Spacer(Modifier.height(22.dp))
+        Text(
+            song.artist.orEmpty(),
+            color = p.onBackground.copy(alpha = 0.92f),
+            fontSize = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clickable(enabled = song.artistId != null) {
+                song.artistId?.let(onArtist)
+            },
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            song.title,
+            color = p.onBackground,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        song.album?.takeIf { it.isNotBlank() }?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, color = p.onBackground.copy(alpha = 0.55f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+
+            Spacer(Modifier.height(16.dp))
+            MetaRow(
+                codec = song.codecLabel,
+                sampleRate = song.sampleRateLabel,
+                favorite = ui.isFavorite(song),
+                onToggleFavorite = { player.toggleFavorite(song) },
+            )
+
+            Spacer(Modifier.height(18.dp))
+            ControlsDeck(ui)
+            Spacer(Modifier.height(8.dp))
+            IconButton(onClick = onClose) {
+                Icon(
+                    Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = "Close",
+                    tint = p.onBackground.copy(alpha = 0.55f),
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+            Box(Modifier.fillMaxWidth().height(8.dp).clickable(onClick = onOpenQueue))
+            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun ControlsRow(ui: PlayerUiState) {
+private fun MetaRow(
+    codec: String?,
+    sampleRate: String?,
+    favorite: Boolean,
+    onToggleFavorite: () -> Unit,
+) {
+    val p = LocalPalette.current
+    val mute = p.onBackground.copy(alpha = 0.45f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        if (!codec.isNullOrBlank()) {
+            Text(codec, color = mute, fontSize = 13.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(16.dp))
+        }
+        IconButton(onClick = onToggleFavorite, modifier = Modifier.size(36.dp)) {
+            Icon(
+                if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = if (favorite) "Remove from favorites" else "Add to favorites",
+                tint = if (favorite) p.primary else mute,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        if (!sampleRate.isNullOrBlank()) {
+            Spacer(Modifier.width(16.dp))
+            Text(sampleRate, color = mute, fontSize = 13.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun QueuePage(
+    ui: PlayerUiState,
+    onClose: () -> Unit,
+    headerModifier: Modifier = Modifier,
+) {
+    val player = LocalPlayer.current
+    val p = LocalPalette.current
+    val song = ui.current ?: return
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        Row(
+            headerModifier
+                .fillMaxWidth()
+                .clickable(onClick = onClose)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Rounded.KeyboardArrowDown, "Back", tint = p.onBackground)
+            }
+            CoverArt(song.coverArt, Modifier.size(44.dp), song.title, corner = 4.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(song.artist.orEmpty(), color = p.onBackground.copy(alpha = 0.55f), maxLines = 1, fontSize = 12.sp)
+            }
+            IconButton(onClick = { player.playPause() }) {
+                Icon(
+                    if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    if (ui.isPlaying) "Pause" else "Play",
+                    tint = p.onBackground,
+                )
+            }
+        }
+        Text(
+            "UP NEXT",
+            color = p.onBackground,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            letterSpacing = 1.1.sp,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+        )
+        LazyColumn(Modifier.fillMaxSize()) {
+            itemsIndexed(ui.upNext, key = { i, s -> "${s.id}-$i" }) { i, s ->
+                SongRow(
+                    song = s,
+                    onClick = { player.playFromQueue(ui.upNextIndices[i]) },
+                    playing = false,
+                    showCover = true,
+                )
+            }
+            if (ui.upNext.isEmpty()) {
+                item {
+                    Text(
+                        "Nothing else queued",
+                        color = p.onBackground.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniBar(
+    ui: PlayerUiState,
+    modifier: Modifier = Modifier,
+    onPlayPause: () -> Unit,
+) {
+    val p = LocalPalette.current
+    val song = ui.current ?: return
+    val progress = if (ui.durationMs > 0) (ui.positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f) else 0f
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(p.surface),
+    ) {
+        Box(Modifier.fillMaxWidth().height(3.dp).background(p.onBackground.copy(alpha = 0.12f))) {
+            Box(
+                Modifier
+                    .fillMaxWidth(progress)
+                    .height(3.dp)
+                    .background(p.primary),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CoverArt(song.coverArt, Modifier.size(44.dp), song.title, corner = 2.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(
+                    ui.playbackError ?: song.artist.orEmpty(),
+                    color = p.onBackground.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 13.sp,
+                )
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(
+                    if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    if (ui.isPlaying) "Pause" else "Play",
+                    tint = p.onBackground,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlsDeck(ui: PlayerUiState) {
     val player = LocalPlayer.current
     val p = LocalPalette.current
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
@@ -406,7 +554,7 @@ private fun ControlsRow(ui: PlayerUiState) {
             Icon(
                 Icons.Rounded.Shuffle,
                 "Shuffle",
-                tint = if (ui.shuffle) p.primary else p.onBackground.copy(alpha = 0.55f),
+                tint = if (ui.shuffle) p.onBackground else p.onBackground.copy(alpha = 0.32f),
             )
         }
         IconButton(onClick = { player.previous() }) {
@@ -415,27 +563,27 @@ private fun ControlsRow(ui: PlayerUiState) {
         Box(
             Modifier
                 .size(72.dp)
+                .shadow(8.dp, CircleShape)
                 .clip(CircleShape)
-                .background(p.primary)
+                .background(p.playButton)
                 .clickable { player.playPause() },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                 if (ui.isPlaying) "Pause" else "Play",
-                tint = p.onPrimary,
-                modifier = Modifier.size(40.dp),
+                tint = p.onPlayButton,
+                modifier = Modifier.size(36.dp),
             )
         }
         IconButton(onClick = { player.next() }) {
             Icon(Icons.Rounded.SkipNext, "Next", tint = p.onBackground, modifier = Modifier.size(36.dp))
         }
         IconButton(onClick = { player.toggleRepeat() }) {
-            val icon = if (ui.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat
             Icon(
-                icon,
+                if (ui.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
                 "Repeat",
-                tint = if (ui.repeatMode != Player.REPEAT_MODE_OFF) p.primary else p.onBackground.copy(alpha = 0.55f),
+                tint = if (ui.repeatMode != Player.REPEAT_MODE_OFF) p.onBackground else p.onBackground.copy(alpha = 0.32f),
             )
         }
     }

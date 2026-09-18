@@ -7,25 +7,23 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -38,6 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -70,6 +70,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
+            }
+        }
         val app = application as AuralisApp
         val container = app.container
         setContent {
@@ -84,19 +91,11 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.Dark -> true
                 ThemeMode.Light -> false
             }
-            container.player.setPreferDark(dark)
-            container.player.transcodeBitrate = transcode
+            LaunchedEffect(dark) { container.player.setPreferDark(dark) }
+            LaunchedEffect(transcode) { container.player.applyTranscode(transcode) }
 
             LaunchedEffect(Unit) {
-                val stored = container.credentials.load() ?: return@LaunchedEffect
-                runCatching {
-                    container.client.login(stored)
-                    container.player.transcodeBitrate = stored.transcodeBitrate
-                    container.setLoggedIn(true)
-                }.onFailure {
-                    container.credentials.clear()
-                    container.setLoggedIn(false)
-                }
+                container.restoreSession()
             }
 
             val palette = playerState.palette.let { pal ->
@@ -124,7 +123,7 @@ class MainActivity : ComponentActivity() {
                         onTranscode = {
                             transcode = it
                             prefs.transcode = it
-                            container.player.transcodeBitrate = it
+                            container.player.applyTranscode(it)
                             val creds = container.credentials.load()
                             if (creds != null) container.credentials.save(creds.copy(transcodeBitrate = it))
                         },
@@ -135,13 +134,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class Tab(val route: String, val label: String, val filled: androidx.compose.ui.graphics.vector.ImageVector, val outline: androidx.compose.ui.graphics.vector.ImageVector)
+private data class Tab(val route: String, val label: String, val icon: Int)
 
 private val tabs = listOf(
-    Tab("home", "Home", Icons.Rounded.Home, Icons.Outlined.Home),
-    Tab("artists", "Artists", Icons.Rounded.Person, Icons.Outlined.Person),
-    Tab("search", "Search", Icons.Rounded.Search, Icons.Outlined.Search),
-    Tab("settings", "Settings", Icons.Rounded.Settings, Icons.Outlined.Settings),
+    Tab("home", "Home", R.drawable.ic_nav_home),
+    Tab("artists", "Artists", R.drawable.ic_nav_artists),
+    Tab("search", "Search", R.drawable.ic_nav_search),
+    Tab("settings", "Settings", R.drawable.ic_nav_settings),
 )
 
 @Composable
@@ -152,7 +151,8 @@ private fun AuralisRoot(
     transcode: Int,
     onTranscode: (Int) -> Unit,
 ) {
-    val nav = rememberNavController()
+    // Discard saved tab stacks and their library state when the account changes.
+    val nav = androidx.compose.runtime.key(loggedIn) { rememberNavController() }
     val p = LocalPalette.current
     val container = LocalContainer.current
     val playerState by container.player.state.collectAsState()
@@ -163,6 +163,7 @@ private fun AuralisRoot(
     val showNav = loggedIn && onTabs && sheet.floatValue < 0.45f
 
     LaunchedEffect(loggedIn) {
+        sheet.floatValue = 0f
         val current = nav.currentDestination?.route
         if (loggedIn && (current == "login" || current == null)) {
             nav.navigate("home") { popUpTo("login") { inclusive = true } }
@@ -176,56 +177,70 @@ private fun AuralisRoot(
             containerColor = Color.Transparent,
             bottomBar = {
                 if (showNav) {
-                    NavigationBar(
-                        containerColor = p.surface.copy(alpha = 0.55f),
-                        contentColor = p.onBackground,
-                        modifier = Modifier.navigationBarsPadding(),
-                    ) {
-                        tabs.forEach { tab ->
-                            val selected = route == tab.route
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    nav.navigate(tab.route) {
-                                        popUpTo("home") { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = { Icon(if (selected) tab.filled else tab.outline, tab.label) },
-                                label = { Text(tab.label) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = p.primary,
-                                    selectedTextColor = p.primary,
-                                    indicatorColor = p.primary.copy(alpha = 0.18f),
-                                    unselectedIconColor = p.onBackground.copy(alpha = 0.55f),
-                                    unselectedTextColor = p.onBackground.copy(alpha = 0.55f),
-                                ),
-                            )
+                    Column(Modifier.fillMaxWidth().background(p.background)) {
+                        NavigationBar(
+                            containerColor = p.background,
+                            contentColor = p.onBackground,
+                            tonalElevation = 0.dp,
+                            windowInsets = WindowInsets(0, 0, 0, 0),
+                        ) {
+                            tabs.forEach { tab ->
+                                val selected = route == tab.route
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        nav.navigate(tab.route) {
+                                            popUpTo("home") { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    icon = {
+                                        Icon(
+                                            painter = painterResource(tab.icon),
+                                            contentDescription = tab.label,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = if (selected) p.onBackground else p.onBackground.copy(alpha = 0.38f),
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = p.onBackground,
+                                        unselectedIconColor = p.onBackground.copy(alpha = 0.38f),
+                                        indicatorColor = Color.Transparent,
+                                    ),
+                                )
+                            }
                         }
+                        Spacer(
+                            Modifier
+                                .fillMaxWidth()
+                                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                                .background(p.background),
+                        )
                     }
                 }
             },
-        ) { _ ->
+        ) { contentPadding ->
             NavHost(
                 navController = nav,
                 startDestination = if (loggedIn) "home" else "login",
-                modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                modifier = Modifier.fillMaxSize().padding(contentPadding),
                 enterTransition = { fadeIn() },
                 exitTransition = { fadeOut() },
             ) {
                 composable("login") { LoginScreen() }
                 composable("home") {
                     HomeScreen(
-                        onPlaylist = { nav.navigate("playlist/$it") },
-                        onAlbum = { nav.navigate("album/$it") },
+                        onPlaylist = { nav.navigate("playlist/${encode(it)}") },
+                        onAlbum = { nav.navigate("album/${encode(it)}") },
+                        onArtist = { nav.navigate("artist/${encode(it)}") },
                     )
                 }
-                composable("artists") { ArtistsScreen(onArtist = { nav.navigate("artist/$it") }) }
+                composable("artists") { ArtistsScreen(onArtist = { nav.navigate("artist/${encode(it)}") }) }
                 composable("search") {
                     SearchScreen(
-                        onArtist = { nav.navigate("artist/$it") },
-                        onAlbum = { nav.navigate("album/$it") },
+                        onArtist = { nav.navigate("artist/${encode(it)}") },
+                        onAlbum = { nav.navigate("album/${encode(it)}") },
                     )
                 }
                 composable("settings") {
@@ -234,7 +249,9 @@ private fun AuralisRoot(
                         onThemeMode = onThemeMode,
                         transcode = transcode,
                         onTranscode = onTranscode,
-                        onLoggedOut = { container.setLoggedIn(false) },
+                        onLoggedOut = {
+                            sheet.floatValue = 0f
+                        },
                     )
                 }
                 composable(
@@ -245,10 +262,10 @@ private fun AuralisRoot(
                     ArtistScreen(
                         artistId = id,
                         onBack = { nav.popBackStack() },
-                        onAlbum = { nav.navigate("album/$it") },
-                        onPopular = { artistId, name -> nav.navigate("artist/$artistId/popular/${encode(name)}") },
-                        onAlbums = { artistId, name -> nav.navigate("artist/$artistId/albums/${encode(name)}") },
-                        onArtist = { nav.navigate("artist/$it") },
+                        onAlbum = { nav.navigate("album/${encode(it)}") },
+                        onPopular = { artistId, name -> nav.navigate("artist/${encode(artistId)}/popular/${encode(name)}") },
+                        onAlbums = { artistId, name -> nav.navigate("artist/${encode(artistId)}/albums/${encode(name)}") },
+                        onArtist = { nav.navigate("artist/${encode(it)}") },
                     )
                 }
                 composable(
@@ -260,7 +277,7 @@ private fun AuralisRoot(
                 ) { entry ->
                     PopularSongsScreen(
                         artistId = entry.arguments?.getString("id") ?: return@composable,
-                        artistName = decode(entry.arguments?.getString("name").orEmpty()),
+                        artistName = entry.arguments?.getString("name").orEmpty(),
                         onBack = { nav.popBackStack() },
                     )
                 }
@@ -273,9 +290,9 @@ private fun AuralisRoot(
                 ) { entry ->
                     ArtistAlbumsScreen(
                         artistId = entry.arguments?.getString("id") ?: return@composable,
-                        artistName = decode(entry.arguments?.getString("name").orEmpty()),
+                        artistName = entry.arguments?.getString("name").orEmpty(),
                         onBack = { nav.popBackStack() },
-                        onAlbum = { nav.navigate("album/$it") },
+                        onAlbum = { nav.navigate("album/${encode(it)}") },
                     )
                 }
                 composable(
@@ -285,7 +302,7 @@ private fun AuralisRoot(
                     AlbumScreen(
                         albumId = entry.arguments?.getString("id") ?: return@composable,
                         onBack = { nav.popBackStack() },
-                        onArtist = { nav.navigate("artist/$it") },
+                        onArtist = { nav.navigate("artist/${encode(it)}") },
                     )
                 }
                 composable(
@@ -303,7 +320,7 @@ private fun AuralisRoot(
         if (loggedIn && playerState.current != null) {
             NowPlayingHost(
                 sheet = sheet,
-                onArtist = { nav.navigate("artist/$it") },
+                onArtist = { nav.navigate("artist/${encode(it)}") },
                 bottomNavVisible = onTabs,
             )
         }
@@ -311,4 +328,3 @@ private fun AuralisRoot(
 }
 
 private fun encode(value: String): String = android.net.Uri.encode(value)
-private fun decode(value: String): String = android.net.Uri.decode(value)

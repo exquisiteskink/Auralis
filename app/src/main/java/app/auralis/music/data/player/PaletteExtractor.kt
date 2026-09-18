@@ -7,6 +7,9 @@ import androidx.palette.graphics.Palette
 import kotlin.math.max
 import kotlin.math.min
 
+/** Signature Plexamp waveform / progress gold. */
+val WaveformGold = Color(0xFFE8A317)
+
 data class AuralisPalette(
     val isDark: Boolean,
     val background: Color,
@@ -21,38 +24,53 @@ data class AuralisPalette(
     val gradientTop: Color,
     val gradientBottom: Color,
     val scrim: Color,
+    val playButton: Color,
+    val onPlayButton: Color,
+    val blurA: Color,
+    val blurB: Color,
+    val blurC: Color,
 ) {
     companion object {
         fun darkDefault() = AuralisPalette(
             isDark = true,
-            background = Color(0xFF0B0B10),
-            surface = Color(0xFF1A1B22),
-            surfaceHigh = Color(0xFF262733),
-            onBackground = Color(0xFFF4F1EA),
-            onSurface = Color(0xFFE8E4DC),
-            primary = Color(0xFF8AA4FF),
-            onPrimary = Color(0xFF0B0B10),
-            secondary = Color(0xFFD4B483),
-            outline = Color(0x33FFFFFF),
-            gradientTop = Color(0xFF161622),
-            gradientBottom = Color(0xFF0B0B10),
-            scrim = Color(0xCC0B0B10),
+            background = Color(0xFF000000),
+            surface = Color(0xFF111111),
+            surfaceHigh = Color(0xFF1C1C1C),
+            onBackground = Color(0xFFFFFFFF),
+            onSurface = Color(0xFFE6E6E6),
+            primary = WaveformGold,
+            onPrimary = Color(0xFF1A1200),
+            secondary = Color(0xFF8A8A8A),
+            outline = Color(0xFF2A2A2A),
+            gradientTop = Color(0xFF1A1A1A),
+            gradientBottom = Color(0xFF000000),
+            scrim = Color(0xFF000000),
+            playButton = Color(0xE61A1A1A),
+            onPlayButton = Color.White,
+            blurA = Color(0xFF1A1A1A),
+            blurB = Color(0xFF141414),
+            blurC = Color(0xFF0A0A0A),
         )
 
         fun lightDefault() = AuralisPalette(
             isDark = false,
-            background = Color(0xFFF4F1EA),
-            surface = Color(0xFFFFFFFF),
-            surfaceHigh = Color(0xFFEAE4D8),
-            onBackground = Color(0xFF16151C),
-            onSurface = Color(0xFF1C1B22),
-            primary = Color(0xFF3D5A9A),
-            onPrimary = Color(0xFFFFFFFF),
-            secondary = Color(0xFF8A6A3A),
-            outline = Color(0x33000000),
-            gradientTop = Color(0xFFE8E2D6),
-            gradientBottom = Color(0xFFF4F1EA),
-            scrim = Color(0x66F4F1EA),
+            background = Color(0xFFE2E2E2),
+            surface = Color(0xFFEAEAEA),
+            surfaceHigh = Color(0xFFD8D8D8),
+            onBackground = Color(0xFF141414),
+            onSurface = Color(0xFF1A1A1A),
+            primary = WaveformGold,
+            onPrimary = Color(0xFF1A1200),
+            secondary = Color(0xFF6A6A6A),
+            outline = Color(0xFFC4C4C4),
+            gradientTop = Color(0xFFD8D8D8),
+            gradientBottom = Color(0xFFE6E6E6),
+            scrim = Color(0xFFE2E2E2),
+            playButton = Color(0xFFC2C2C2),
+            onPlayButton = Color(0xFF111111),
+            blurA = Color(0xFFD4D4D4),
+            blurB = Color(0xFFDEDEDE),
+            blurC = Color(0xFFE8E8E8),
         )
     }
 }
@@ -69,43 +87,57 @@ object PaletteExtractor {
         val dominant = palette.dominantSwatch
 
         return if (preferDark) {
-            val bg = (darkMuted ?: darkVibrant ?: dominant)?.rgb.toColor(AuralisPalette.darkDefault().background)
-            val primary = (vibrant ?: lightVibrant ?: muted)?.rgb.toColor(AuralisPalette.darkDefault().primary)
-            val secondary = (muted ?: darkVibrant)?.rgb.toColor(AuralisPalette.darkDefault().secondary)
-            val top = (darkVibrant ?: vibrant ?: dominant)?.rgb.toColor(bg)
+            val a = (darkVibrant ?: vibrant ?: dominant)?.rgb.toColor(Color(0xFF3A2A22)).asBlur(0.22f, 0.42f, 0.55f)
+            val b = (muted ?: darkMuted ?: dominant)?.rgb.toColor(Color(0xFF2A2420)).asBlur(0.16f, 0.32f, 0.45f)
+            val c = (darkMuted ?: dominant ?: muted)?.rgb.toColor(Color(0xFF1A1614)).asBlur(0.10f, 0.24f, 0.40f)
+            val mini = a.asBlur(0.18f, 0.30f, 0.40f)
+            val accent = (vibrant ?: lightVibrant ?: darkVibrant ?: dominant)?.rgb.toColor(WaveformGold).asAccent(dark = true)
             AuralisPalette(
                 isDark = true,
-                background = bg.darken(0.35f),
-                surface = bg.lighten(0.10f).copy(alpha = 1f),
-                surfaceHigh = bg.lighten(0.18f),
-                onBackground = Color(0xFFF6F3EC),
-                onSurface = Color(0xFFECE8E0),
-                primary = primary.ensureContrast(),
-                onPrimary = Color(0xFF0B0B10),
-                secondary = secondary,
-                outline = Color.White.copy(alpha = 0.14f),
-                gradientTop = top.darken(0.15f),
-                gradientBottom = bg.darken(0.45f),
-                scrim = Color.Black.copy(alpha = 0.45f),
+                background = Color(0xFF000000),
+                surface = mini,
+                surfaceHigh = mini.lighten(0.08f),
+                onBackground = Color(0xFFFFFFFF),
+                onSurface = Color(0xFFE8E8E8),
+                primary = accent,
+                onPrimary = Color(0xFF1A1200),
+                secondary = b,
+                outline = Color.White.copy(alpha = 0.10f),
+                gradientTop = a,
+                gradientBottom = c,
+                scrim = Color(0xFF000000),
+                playButton = Color(0xE6141414),
+                onPlayButton = Color.White,
+                blurA = a,
+                blurB = b,
+                blurC = c,
             )
         } else {
-            val bg = (lightMuted ?: lightVibrant ?: muted)?.rgb.toColor(AuralisPalette.lightDefault().background)
-            val primary = (darkVibrant ?: vibrant ?: muted)?.rgb.toColor(AuralisPalette.lightDefault().primary)
-            val secondary = (muted ?: darkMuted)?.rgb.toColor(AuralisPalette.lightDefault().secondary)
+            val a = (vibrant ?: lightVibrant ?: dominant)?.rgb.toColor(Color(0xFFC8C0B8)).asLightBlur(0.62f, 0.78f, 0.52f)
+            val b = (muted ?: lightMuted ?: dominant)?.rgb.toColor(Color(0xFFC4C4C4)).asLightBlur(0.68f, 0.82f, 0.40f)
+            val c = (lightMuted ?: muted ?: dominant)?.rgb.toColor(Color(0xFFD0D0D0)).asLightBlur(0.74f, 0.86f, 0.32f)
+            val page = b.asLightBlur(0.78f, 0.86f, 0.22f)
+            val mini = a.asLightBlur(0.70f, 0.80f, 0.36f)
+            val accent = (vibrant ?: darkVibrant ?: lightVibrant ?: dominant)?.rgb.toColor(WaveformGold).asAccent(dark = false)
             AuralisPalette(
                 isDark = false,
-                background = bg.lighten(0.18f),
-                surface = Color.White.copy(alpha = 0.82f),
-                surfaceHigh = bg.lighten(0.08f),
-                onBackground = Color(0xFF16151C),
-                onSurface = Color(0xFF1C1B22),
-                primary = primary.darken(0.1f),
+                background = page,
+                surface = mini,
+                surfaceHigh = a.asLightBlur(0.66f, 0.76f, 0.30f),
+                onBackground = Color(0xFF141414),
+                onSurface = Color(0xFF1A1A1A),
+                primary = accent,
                 onPrimary = Color.White,
-                secondary = secondary.darken(0.1f),
+                secondary = b,
                 outline = Color.Black.copy(alpha = 0.10f),
-                gradientTop = bg,
-                gradientBottom = bg.lighten(0.22f),
-                scrim = Color.White.copy(alpha = 0.35f),
+                gradientTop = a,
+                gradientBottom = c,
+                scrim = page,
+                playButton = Color(0xFFBDBDBD),
+                onPlayButton = Color(0xFF111111),
+                blurA = a,
+                blurB = b,
+                blurC = c,
             )
         }
     }
@@ -127,11 +159,31 @@ object PaletteExtractor {
         return Color(android.graphics.Color.HSVToColor(hsv))
     }
 
-    private fun Color.ensureContrast(): Color {
+    private fun Color.asBlur(minV: Float, maxV: Float, sat: Float): Color {
         val hsv = FloatArray(3)
         android.graphics.Color.colorToHSV(toArgb(), hsv)
-        if (hsv[2] < 0.45f) hsv[2] = 0.55f
-        if (hsv[1] < 0.25f) hsv[1] = 0.35f
+        hsv[2] = hsv[2].coerceIn(minV, maxV)
+        hsv[1] = hsv[1].coerceIn(0.12f, 0.72f) * (0.55f + sat * 0.45f)
+        hsv[1] = hsv[1].coerceIn(0.12f, 0.70f)
+        return Color(android.graphics.Color.HSVToColor(hsv))
+    }
+
+    private fun Color.asLightBlur(minV: Float, maxV: Float, sat: Float): Color {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(toArgb(), hsv)
+        if (hsv[1] < 0.08f) hsv[1] = 0.12f
+        hsv[1] = (hsv[1] * 0.85f).coerceIn(0.16f, sat.coerceIn(0.16f, 0.62f))
+        hsv[2] = hsv[2].coerceIn(minV, maxV)
+        if (hsv[2] < minV) hsv[2] = minV
+        return Color(android.graphics.Color.HSVToColor(hsv))
+    }
+
+    private fun Color.asAccent(dark: Boolean): Color {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(toArgb(), hsv)
+        if (hsv[1] < 0.28f) hsv[1] = 0.45f
+        hsv[1] = hsv[1].coerceIn(0.40f, 0.85f)
+        hsv[2] = if (dark) hsv[2].coerceIn(0.62f, 0.95f) else hsv[2].coerceIn(0.38f, 0.62f)
         return Color(android.graphics.Color.HSVToColor(hsv))
     }
 }

@@ -7,12 +7,19 @@ import java.security.SecureRandom
 import kotlin.random.asKotlinRandom
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
+import java.io.IOException
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 class SubsonicException(val code: Int, message: String) : Exception(message)
 
@@ -25,12 +32,7 @@ data class ServerInfo(
 )
 
 class SubsonicClient(
-    val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
-        .writeTimeout(45, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build(),
+    val http: OkHttpClient = buildHttpClient(),
 ) {
     @Volatile
     var credentials: StoredCredentials? = null
@@ -53,7 +55,11 @@ class SubsonicClient(
     }
 
     suspend fun ping(): ServerInfo {
-        val env = get("ping")
+        return ping(credentials ?: throw SubsonicException(40, "Not signed in"))
+    }
+
+    private suspend fun ping(candidate: StoredCredentials): ServerInfo {
+        val env = request("ping", emptyMap(), candidate)
         return ServerInfo(
             type = env.type,
             version = env.version,
@@ -64,24 +70,30 @@ class SubsonicClient(
     }
 
     suspend fun login(candidate: StoredCredentials): Pair<StoredCredentials, ServerInfo> {
-        credentials = candidate
-        rotateSessionSalt()
-        return try {
-            val info = ping()
+        val url = runCatching { candidate.serverUrl.trim().trimEnd('/').toHttpUrl() }
+            .getOrElse { throw SubsonicException(0, "Invalid server URL") }
+        requireAllowedServerUrl(url)
+        val result = try {
+            val info = ping(candidate)
             candidate to info
         } catch (e: SubsonicException) {
             if (e.code == 41 && candidate.authMode == AuthMode.Token && candidate.password.isNotEmpty()) {
+                if (url.scheme != "https") {
+                    throw SubsonicException(
+                        41,
+                        "This server needs password auth, which Auralis only sends over HTTPS. Use HTTPS or an API key.",
+                    )
+                }
                 val fallback = candidate.copy(authMode = AuthMode.HexPassword)
-                credentials = fallback
-                fallback to ping()
+                fallback to ping(fallback)
             } else {
-                credentials = null
                 throw e
             }
-        } catch (t: Throwable) {
-            credentials = null
-            throw t
         }
+        // Publish credentials only after authentication succeeds (including fallback).
+        credentials = result.first
+        rotateSessionSalt()
+        return result
     }
 
     suspend fun getPlaylists(): List<Playlist> =
@@ -122,67 +134,129 @@ class SubsonicClient(
         get("getTopSongs", "artist" to artist, "count" to count.toString())
             .topSongs?.song.orEmpty()
 
-    suspend fun search3(query: String, count: Int = 20): SearchResult3 =
+    suspend fun search3(
+        query: String,
+        count: Int = 20,
+        artistCount: Int = count,
+        albumCount: Int = count,
+        songCount: Int = count,
+    ): SearchResult3 =
         get(
             "search3",
             "query" to query,
-            "artistCount" to count.toString(),
-            "albumCount" to count.toString(),
-            "songCount" to count.toString(),
+            "artistCount" to artistCount.toString(),
+            "albumCount" to albumCount.toString(),
+            "songCount" to songCount.toString(),
         ).searchResult3 ?: SearchResult3()
 
+    suspend fun getGenres(): List<Genre> =
+        get("getGenres").genres?.genre.orEmpty()
+
+    suspend fun getSongsByGenre(genre: String, count: Int = 80): List<Song> =
+        get(
+            "getSongsByGenre",
+            "genre" to genre,
+            "count" to count.toString(),
+        ).songsByGenre?.song.orEmpty()
+
     suspend fun scrobble(id: String, submission: Boolean) {
-        runCatching {
+        try {
             get("scrobble", "id" to id, "submission" to submission.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Scrobbling must not interrupt playback.
         }
+    }
+
+    suspend fun getStarredSongs(): List<Song> =
+        get("getStarred2").starred2?.song.orEmpty()
+
+    suspend fun starSong(id: String) {
+        get("star", "id" to id)
+    }
+
+    suspend fun unstarSong(id: String) {
+        get("unstar", "id" to id)
     }
 
     fun coverUrl(coverId: String?, size: Int = 600): String? {
         if (coverId.isNullOrBlank()) return null
-        return buildUrl("getCoverArt", mapOf("id" to coverId, "size" to size.toString()), session = true)
+        val creds = credentials ?: return null
+        return buildUrl("getCoverArt", mapOf("id" to coverId, "size" to size.toString()), session = true, creds = creds)
             .toString()
     }
 
     fun streamUrl(songId: String, maxBitRate: Int = 0): String {
         val extra = mutableMapOf(
             "id" to songId,
-            "estimateContentLength" to "true",
         )
         if (maxBitRate > 0) extra["maxBitRate"] = maxBitRate.toString()
-        else extra["maxBitRate"] = "0"
+        else {
+            extra["maxBitRate"] = "0"
+            extra["format"] = "raw"
+        }
         return buildUrl("stream", extra, session = true).toString()
     }
 
     private suspend fun get(endpoint: String, vararg params: Pair<String, String>): SubsonicEnvelope =
+        request(endpoint, params.toMap(), credentials ?: throw SubsonicException(40, "Not signed in"))
+
+    private suspend fun request(endpoint: String, params: Map<String, String>, creds: StoredCredentials): SubsonicEnvelope =
         withContext(Dispatchers.IO) {
-            val url = buildUrl(endpoint, params.toMap(), session = false)
+            val url = buildUrl(endpoint, params, session = false, creds = creds)
             val request = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
                 .get()
                 .build()
-            http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw SubsonicException(0, "HTTP ${response.code}")
-                }
-                val body = response.body?.string().orEmpty()
-                val root = json.decodeFromString(SubsonicRoot.serializer(), body)
-                val env = root.response
-                if (env.status != "ok") {
-                    val err = env.error
-                    throw SubsonicException(err?.code ?: 0, err?.message ?: "Request failed")
-                }
-                env
+            val body = readResponse(request)
+            val root = json.decodeFromString(SubsonicRoot.serializer(), body)
+            val env = root.response
+            if (env.status != "ok") {
+                val err = env.error
+                throw SubsonicException(err?.code ?: 0, err?.message ?: "Request failed")
             }
+            env
         }
+
+    private suspend fun readResponse(request: Request): String = suspendCancellableCoroutine { continuation ->
+        val call = http.newCall(request)
+        call.timeout().timeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWithException(IOException("Could not connect to the music server", e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val body = response.use {
+                        if (!it.isSuccessful) throw SubsonicException(0, "HTTP ${it.code}")
+                        val source = it.body?.source() ?: throw SubsonicException(0, "Empty server response")
+                        // Includes chunked/gzip responses; do not trust Content-Length.
+                        if (source.request(MAX_RESPONSE_BYTES + 1)) throw SubsonicException(0, "Server response is too large")
+                        source.readUtf8()
+                    }
+                    continuation.resume(body)
+                } catch (e: Exception) {
+                    continuation.resumeWithException(e)
+                }
+            }
+        })
+    }
 
     private fun buildUrl(
         endpoint: String,
         extra: Map<String, String>,
         session: Boolean,
+        creds: StoredCredentials = credentials ?: throw SubsonicException(40, "Not signed in"),
     ): HttpUrl {
-        val creds = credentials ?: throw SubsonicException(40, "Not signed in")
         val root = creds.serverUrl.trim().trimEnd('/').toHttpUrl()
+        requireAllowedServerUrl(root)
+        if (creds.authMode == AuthMode.HexPassword && root.scheme != "https") {
+            throw SubsonicException(41, "Password authentication requires HTTPS")
+        }
         val builder = root.newBuilder()
             .addPathSegment("rest")
             .addPathSegment(endpoint)
@@ -211,6 +285,7 @@ class SubsonicClient(
     }
 
     companion object {
+        internal const val MAX_RESPONSE_BYTES = 16L * 1024 * 1024
         const val CLIENT_NAME = "Auralis"
         const val API_VERSION = "1.16.1"
 

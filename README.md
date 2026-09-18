@@ -1,39 +1,54 @@
 # Auralis
 
-Auralis is an audiophile-focused Android player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers.
+Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-This repository currently ships a **test APK** for feedback. There is no GitHub Release.
+**Version 1.0.0** is the first public release.
 
-## Highlights
+## Install
 
-- Home is playlists first, then recently played albums, then recently added albums
-- Bottom navigation: Home, Artists, Search, Settings
-- Artists in a square Plexamp-style grid
-- Artist page: hero image, top 5 popular songs, horizontally scrolling albums, collapsible About with similar artists that exist in your library
-- Popular songs ranked up to 20 (Subsonic `getTopSongs`, with a Deezer fallback matched to library tracks)
-- Album page with cover art and tracks in disc/track order
-- Mini player while something is playing; swipe up to the now-playing screen, swipe up again for the queue, swipe down to go back, swipe down again to collapse
-- Background gradient follows album-art colors in light and dark mode
-- Glassy, semi-transparent surfaces
-- Original-file streaming by default (no transcode)
+1. Download `Auralis-1.0.0.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases).
+2. On your phone, allow installing from the app you use to open the file.
+3. Open the APK and install.
+
+Android 8.0 (API 26) or later is required. You also need a reachable Navidrome, Subsonic, or OpenSubsonic server.
+
+If you already had a 0.1.x test build, you can install 1.0.0 over it when both were signed with the same local debug key. If Android refuses the update, uninstall the test build first (this signs you out).
+
+## What it does
+
+- **Home** — playlists first, then favorites, recently played albums, recently played artists, genre shuffle chips, and recently added albums. Artist mixes are built from your library.
+- **Artists** — four-column square grid, with a list view if you prefer.
+- **Artist page** — circular photo, play, albums, popular tracks, biography from your server, and similar artists that already exist in the library.
+- **Album and playlist pages** — cover, play/shuffle, numbered track list.
+- **Search** — artists, albums, songs, and genres.
+- **Now playing** — full-screen player with album-art color wash, waveform seek bar, codec / sample rate, heart favorites, and a swipe-up queue. Collapse it to a mini player above the tab bar.
+- **Playback** — Media3 ExoPlayer, gapless-friendly original streams by default, optional 320 / 192 / 128 kbps transcode, lock-screen and notification controls.
+
+Colors on the player and throughout the app are sampled from the current cover (dark and light). The seek bar uses that highlight color.
+
+## Sign in
+
+Open Auralis and enter:
+
+- Server URL, for example `https://music.example.com`
+- Username and password, **or** an OpenSubsonic API key
+
+Auralis talks to the OpenSubsonic REST API (`v=1.16.1`). Default auth is a salted token (`t = md5(password + salt)`). If the server returns error 41 (typical for LDAP), it falls back to hex-encoded password **only over HTTPS**. Prefer HTTPS.
 
 ## Security
 
-Auralis does not send plaintext passwords.
+- Passwords are encrypted with AES-256-GCM; the key stays in Android Keystore and is never shown again after sign-in.
+- Auto-backup excludes the credential store.
+- HTTP is allowed only for LAN hosts (localhost, `.local` / `.lan`, or a private IP). Public servers must use HTTPS.
+- Redirects must keep the same scheme, hostname, and port. Cross-protocol redirects are blocked.
+- TLS uses the system certificate store. Self-signed public certificates are not trusted.
+- Popular tracks and biographies come from *your* server. Auralis does not send artist names to Deezer, MusicBrainz, or Wikipedia.
 
-- Default login is Subsonic token auth: `t = md5(password + salt)` with a fresh salt per API call ([OpenSubsonic authentication](https://opensubsonic.netlify.app/docs/api-reference))
-- If the server returns error `41` (token auth not supported, typically LDAP), it falls back to the documented `p=enc:` hex encoding — never a raw `p=` password
-- OpenSubsonic API keys are supported (`apiKey`, without `u`)
-- Credentials are AES-256-GCM encrypted with a key in Android Keystore
-- Auto-backup excludes the credential store
-- Stream and cover URLs use a session salt, not a reusable plaintext password
-- HTTP is allowed for LAN servers; the login screen warns when you use it. Prefer HTTPS
+See [REVIEW.md](REVIEW.md) for the security and correctness review behind this release.
 
-Passwords are never shown again after sign-in.
+## Build from source
 
-## Test APK
-
-A debug-signed test APK is produced by:
+JDK 17 and Android SDK 35:
 
 ```bash
 export JAVA_HOME="$HOME/.local/share/mise/installs/java/temurin-17.0.20+8"
@@ -41,28 +56,14 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 ./gradlew :app:assembleDebug
 ```
 
-The APK lands at:
+The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-`app/build/outputs/apk/debug/app-debug.apk`
+A local, git-ignored `keystore/debug.jks` keeps the debug signature stable on the machine that produced this release. Fresh clones fall back to Android’s generated debug key.
 
-Copy it to your phone and install it (enable “Install unknown apps” for the file manager you use). Uninstall a previous Auralis test build first only if the signing key changed; this repo’s `keystore/debug.jks` keeps the test signature stable.
-
-This keystore is **debug-only**. It is not a release key.
-
-## Requirements
-
-- Android 8.0+ (API 26)
-- A Navidrome, Subsonic, or OpenSubsonic server
-- JDK 17 and Android SDK 35 to build from source
-
-## Popular songs & artist bios
-
-1. Server `getTopSongs` / `getArtistInfo2` when the server has Last.fm (or similar) configured
-2. Otherwise Deezer’s public API for ranked titles, matched against songs already in your library
-3. MusicBrainz + Wikipedia for a biography if the server does not provide one
-
-Similar artists only include people who already exist in your library. Tapping one opens that artist.
+```bash
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+```
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

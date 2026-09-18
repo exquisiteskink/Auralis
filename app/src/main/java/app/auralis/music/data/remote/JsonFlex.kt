@@ -19,8 +19,8 @@ object FlexibleStringSerializer : KSerializer<String> {
     override fun deserialize(decoder: Decoder): String {
         val element = (decoder as JsonDecoder).decodeJsonElement()
         return when (element) {
-            is JsonPrimitive -> element.content
             JsonNull -> ""
+            is JsonPrimitive -> element.content
             else -> element.toString()
         }
     }
@@ -30,6 +30,7 @@ object FlexibleStringSerializer : KSerializer<String> {
     }
 }
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 object FlexibleStringOrNullSerializer : KSerializer<String?> {
     override val descriptor = PrimitiveSerialDescriptor("FlexStringNull", PrimitiveKind.STRING)
 

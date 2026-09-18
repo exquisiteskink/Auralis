@@ -1,20 +1,22 @@
 package app.auralis.music.ui.album
 
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -26,16 +28,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.auralis.music.data.remote.AlbumWithSongs
 import app.auralis.music.data.remote.formatDuration
 import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.ErrorText
-import app.auralis.music.ui.components.PlayFab
+import app.auralis.music.ui.components.HeaderPlay
+import app.auralis.music.ui.components.ScreenTopBar
 import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.LocalClient
 import app.auralis.music.ui.theme.LocalPalette
@@ -50,12 +53,14 @@ fun AlbumScreen(
     val client = LocalClient.current
     val player = LocalPlayer.current
     val p = LocalPalette.current
-    var album by remember { mutableStateOf<AlbumWithSongs?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var album by remember(albumId) { mutableStateOf<AlbumWithSongs?>(null) }
+    var error by remember(albumId) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(albumId) {
         try {
             album = client.getAlbum(albumId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             error = e.message
         }
@@ -68,60 +73,80 @@ fun AlbumScreen(
     }
 
     val songs = current.song.sortedWith(compareBy({ it.discNumber }, { it.track }, { it.title }))
+    val stats = buildString {
+        append("${songs.size} tracks")
+        if (current.duration > 0) append("  –  ${formatDuration(current.duration)}")
+    }
 
-    Box(Modifier.fillMaxSize()) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 140.dp),
-        ) {
-            Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
-                CoverArt(current.coverArt, Modifier.fillMaxSize(), current.displayName, corner = 0.dp)
-                Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(listOf(Color.Transparent, p.background.copy(alpha = 0.94f))),
-                    ),
+    LazyColumn(
+        Modifier
+            .fillMaxSize()
+            .padding(bottom = 64.dp),
+    ) {
+        item {
+            ScreenTopBar(current.displayName, onBack)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                CoverArt(
+                    current.coverArt,
+                    Modifier
+                        .size(132.dp)
+                        .shadow(10.dp, RoundedCornerShape(8.dp))
+                        .border(2.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(8.dp)),
+                    current.displayName,
+                    corner = 8.dp,
                 )
-                IconButton(onClick = onBack, modifier = Modifier.padding(8.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Color.White)
-                }
-                Column(Modifier.align(Alignment.BottomStart).padding(20.dp)) {
-                    Text(current.displayName, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    Row {
-                        Text(
-                            current.artist.orEmpty(),
-                            color = Color.White.copy(alpha = 0.85f),
-                            modifier = Modifier.clickable(enabled = current.artistId != null) {
-                                current.artistId?.let(onArtist)
-                            },
-                        )
-                        if (current.year > 0) {
-                            Text("  ·  ${current.year}", color = Color.White.copy(alpha = 0.7f))
-                        }
+                Spacer(Modifier.weight(1f))
+                Column(horizontalAlignment = Alignment.End) {
+                    HeaderPlay(
+                        onClick = { if (songs.isNotEmpty()) player.play(songs, 0) },
+                        size = 64.dp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    IconButton(onClick = { if (songs.isNotEmpty()) player.play(songs.shuffled(), 0) }) {
+                        Icon(Icons.Rounded.Shuffle, "Shuffle", tint = p.onBackground.copy(alpha = 0.75f))
                     }
-                    val stats = buildString {
-                        append("${songs.size} tracks")
-                        if (current.duration > 0) append("  ·  ${formatDuration(current.duration)}")
-                    }
-                    Text(stats, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp)
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            songs.forEachIndexed { i, song ->
-                SongRow(
-                    song = song,
-                    showArtist = false,
-                    onClick = { player.play(songs, i) },
-                    playing = player.state.value.current?.id == song.id,
-                )
-            }
-        }
-        if (songs.isNotEmpty()) {
-            PlayFab(
-                onClick = { player.play(songs, 0) },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 148.dp),
+            Text(
+                stats,
+                color = p.onBackground.copy(alpha = 0.55f),
+                fontSize = 13.sp,
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
             )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .height(1.dp)
+                    .background(p.onBackground.copy(alpha = 0.22f)),
+            )
+        }
+        itemsIndexed(songs) { i, song ->
+            SongRow(
+                song = song,
+                showArtist = true,
+                showCover = false,
+                rank = if (song.track > 0) song.track else i + 1,
+                onClick = { player.play(songs, i) },
+            )
+        }
+        item {
+            current.artist?.takeIf { it.isNotBlank() }?.let { artistName ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    artistName,
+                    color = p.onBackground.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp, vertical = 8.dp)
+                        .clickable(enabled = current.artistId != null) {
+                            current.artistId?.let(onArtist)
+                        },
+                )
+            }
         }
     }
 }

@@ -1,7 +1,6 @@
 package app.auralis.music.ui.login
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,8 +10,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -37,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -68,13 +64,15 @@ fun LoginScreen() {
     var httpWarning by remember { mutableStateOf(false) }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedBorderColor = p.primary,
-        unfocusedBorderColor = p.outline,
-        focusedLabelColor = p.primary,
+        focusedBorderColor = p.onBackground.copy(alpha = 0.45f),
+        unfocusedBorderColor = p.onBackground.copy(alpha = 0.18f),
+        focusedLabelColor = p.onBackground.copy(alpha = 0.7f),
         unfocusedLabelColor = p.onBackground.copy(alpha = 0.5f),
-        cursorColor = p.primary,
+        cursorColor = p.onBackground,
         focusedTextColor = p.onBackground,
         unfocusedTextColor = p.onBackground,
+        focusedContainerColor = p.surfaceHigh.copy(alpha = 0.6f),
+        unfocusedContainerColor = p.surfaceHigh.copy(alpha = 0.4f),
     )
 
     Column(
@@ -86,17 +84,7 @@ fun LoginScreen() {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier
-                .size(88.dp)
-                .clip(CircleShape)
-                .background(p.primary.copy(alpha = 0.18f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("A", color = p.primary, fontSize = 40.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(16.dp))
-        Text("Auralis", color = p.onBackground, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+        Text("Auralis", color = p.onBackground, fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Text(
             "Navidrome · Subsonic · OpenSubsonic",
             color = p.onBackground.copy(alpha = 0.55f),
@@ -121,7 +109,7 @@ fun LoginScreen() {
             if (httpWarning) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "HTTP is allowed for LAN servers. Credentials still use a salted token, never plaintext. Prefer HTTPS when possible.",
+                    "HTTP is only allowed for LAN addresses (localhost, .local, or a private IP). Prefer HTTPS. Token auth is used when the server supports it.",
                     color = p.secondary,
                     fontSize = 12.sp,
                 )
@@ -172,7 +160,7 @@ fun LoginScreen() {
             TextButton(onClick = { showApiKey = !showApiKey }) {
                 Text(
                     if (showApiKey) "Use username & password" else "Use OpenSubsonic API key",
-                    color = p.primary,
+                    color = p.onBackground.copy(alpha = 0.75f),
                 )
             }
             if (error != null) {
@@ -200,10 +188,9 @@ fun LoginScreen() {
                                     authMode = AuthMode.Token,
                                 )
                             }
-                            val (stored, _) = container.client.login(creds)
-                            container.credentials.save(stored)
-                            container.player.transcodeBitrate = stored.transcodeBitrate
-                            container.setLoggedIn(true)
+                            container.signIn(creds)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
                         } catch (e: SubsonicException) {
                             error = humanError(e)
                         } catch (e: Exception) {
@@ -215,8 +202,8 @@ fun LoginScreen() {
                 },
                 enabled = !loading && url.isNotBlank() && (showApiKey && apiKey.isNotBlank() || !showApiKey && username.isNotBlank() && password.isNotBlank()),
                 modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = p.primary, contentColor = p.onPrimary),
+                shape = RoundedCornerShape(28.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = p.playButton, contentColor = p.onPlayButton),
             ) {
                 if (loading) CircularProgressIndicator(Modifier.size(22.dp), color = p.onPrimary, strokeWidth = 2.dp)
                 else Text("Connect", fontWeight = FontWeight.SemiBold)
@@ -224,7 +211,7 @@ fun LoginScreen() {
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            "Passwords are stored in Android Keystore and never sent in plaintext. Token auth (MD5 password+salt) is used unless the server requires LDAP hex encoding or an API key.",
+            "Passwords are encrypted in Android Keystore. Sign-in uses salted token auth when the server allows it. HTTP is limited to LAN; HTTPS is required on the public internet.",
             color = p.onBackground.copy(alpha = 0.4f),
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 8.dp),
@@ -241,7 +228,7 @@ private fun normalizeUrl(raw: String): String {
 
 private fun humanError(e: SubsonicException): String = when (e.code) {
     40 -> "Wrong username or password"
-    41 -> "Token auth is not supported on this account; retrying is handled automatically"
+    41 -> e.message ?: "Token auth is not supported on this account"
     42 -> "This server does not support the selected login method"
     43 -> "Conflicting login parameters"
     44 -> "Invalid API key"

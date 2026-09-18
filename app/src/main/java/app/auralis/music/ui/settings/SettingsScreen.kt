@@ -20,8 +20,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.auralis.music.BuildConfig
 import app.auralis.music.ui.components.GlassSurface
 import app.auralis.music.ui.theme.LocalContainer
 import app.auralis.music.ui.theme.LocalPalette
@@ -46,9 +48,16 @@ fun SettingsScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 12.dp)
-            .padding(bottom = 140.dp),
+            .padding(bottom = 64.dp),
     ) {
-        Text("Settings", color = p.onBackground, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Settings",
+            color = p.onBackground,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
         Spacer(Modifier.height(20.dp))
         GlassSurface(Modifier.fillMaxWidth()) {
             Text("Server", color = p.onBackground.copy(alpha = 0.5f), fontSize = 12.sp)
@@ -63,13 +72,12 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),
             )
+            Spacer(Modifier.height(8.dp))
             TextButton(onClick = {
-                container.credentials.clear()
-                container.client.credentials = null
-                container.player.resetPalette()
+                container.signOut()
                 onLoggedOut()
             }) {
-                Text("Sign out", color = p.primary)
+                Text("Sign out", color = p.onBackground)
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -100,7 +108,7 @@ fun SettingsScreen(
                 }
             }
             Text(
-                "While music plays, backgrounds pick up colors from the album art in the current light or dark mode.",
+                "While music plays, backgrounds wash with colors sampled from the album art.",
                 color = p.onBackground.copy(alpha = 0.45f),
                 fontSize = 12.sp,
             )
@@ -134,9 +142,9 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         GlassSurface(Modifier.fillMaxWidth()) {
             Text("Auralis", color = p.onBackground, fontWeight = FontWeight.SemiBold)
-            Text("0.1.0-test", color = p.onBackground.copy(alpha = 0.5f), fontSize = 13.sp)
+            Text(BuildConfig.VERSION_NAME, color = p.onBackground.copy(alpha = 0.5f), fontSize = 13.sp)
             Text(
-                "A listening app for Navidrome, Subsonic, and OpenSubsonic. This build is a test APK — not a release.",
+                "A listening app for Navidrome, Subsonic, and OpenSubsonic.",
                 color = p.onBackground.copy(alpha = 0.5f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),
@@ -155,4 +163,9 @@ class AppearancePrefs(context: Context) {
     var transcode: Int
         get() = prefs.getInt("transcode", 0)
         set(value) { prefs.edit().putInt("transcode", value).apply() }
+
+    var artistGrid: Boolean
+        get() = prefs.getBoolean("artist_grid", true)
+        set(value) { prefs.edit().putBoolean("artist_grid", value).apply() }
+
 }

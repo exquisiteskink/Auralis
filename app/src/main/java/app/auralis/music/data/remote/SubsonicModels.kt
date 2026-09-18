@@ -26,6 +26,9 @@ data class SubsonicEnvelope(
     val searchResult3: SearchResult3? = null,
     val artistInfo2: ArtistInfo2? = null,
     val topSongs: SongsWrap? = null,
+    val genres: GenresWrap? = null,
+    val songsByGenre: SongsWrap? = null,
+    val starred2: Starred2? = null,
     @Serializable(with = OpenSubsonicExtensionListSerializer::class)
     val openSubsonicExtensions: List<OpenSubsonicExtension> = emptyList(),
 )
@@ -200,6 +203,29 @@ data class SongsWrap(
 )
 
 @Serializable
+data class Starred2(
+    @Serializable(with = ArtistListSerializer::class)
+    val artist: List<ArtistID3> = emptyList(),
+    @Serializable(with = AlbumListSerializer::class)
+    val album: List<AlbumID3> = emptyList(),
+    @Serializable(with = SongListSerializer::class)
+    val song: List<Song> = emptyList(),
+)
+
+@Serializable
+data class GenresWrap(
+    @Serializable(with = GenreListSerializer::class)
+    val genre: List<Genre> = emptyList(),
+)
+
+@Serializable
+data class Genre(
+    val value: String = "",
+    val songCount: Int = 0,
+    val albumCount: Int = 0,
+)
+
+@Serializable
 data class Song(
     @Serializable(with = FlexibleStringSerializer::class) val id: String,
     val title: String = "",
@@ -223,18 +249,24 @@ data class Song(
     val playCount: Int = 0,
     val starred: String? = null,
 ) {
+    val isFavorite: Boolean get() = !starred.isNullOrBlank()
+
+    val codecLabel: String?
+        get() = suffix?.uppercase()?.ifBlank { null }
+
+    val sampleRateLabel: String?
+        get() = when {
+            samplingRate >= 1000 -> "${samplingRate / 1000}.${(samplingRate % 1000) / 100} kHz"
+                .replace(".0 kHz", " kHz")
+            samplingRate > 0 -> "$samplingRate Hz"
+            else -> null
+        }
+
     val qualityLabel: String?
         get() {
-            val fmt = suffix?.uppercase()?.ifBlank { null }
             val depth = if (bitDepth > 0) "$bitDepth-bit" else null
-            val rate = when {
-                samplingRate >= 1000 -> "${samplingRate / 1000}.${(samplingRate % 1000) / 100} kHz"
-                    .replace(".0 kHz", " kHz")
-                samplingRate > 0 -> "$samplingRate Hz"
-                else -> null
-            }
             val br = if (bitRate > 0) "$bitRate kbps" else null
-            val parts = listOfNotNull(fmt, depth, rate, br)
+            val parts = listOfNotNull(codecLabel, depth, sampleRateLabel, br)
             return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
         }
 }
@@ -247,6 +279,7 @@ object PlaylistListSerializer : FlexListSerializer<Playlist>(Playlist.serializer
 object SimilarArtistListSerializer : FlexListSerializer<SimilarArtist>(SimilarArtist.serializer())
 object OpenSubsonicExtensionListSerializer :
     FlexListSerializer<OpenSubsonicExtension>(OpenSubsonicExtension.serializer())
+object GenreListSerializer : FlexListSerializer<Genre>(Genre.serializer())
 
 fun formatDuration(seconds: Int): String {
     if (seconds <= 0) return "0:00"

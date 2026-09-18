@@ -13,8 +13,8 @@ android {
         applicationId = "app.auralis.music"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-test"
+        versionCode = 10
+        versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -29,12 +29,16 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("test")
+            signingConfig = if (rootProject.file("keystore/debug.jks").isFile) {
+                signingConfigs.getByName("test")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             applicationIdSuffix = ""
             isMinifyEnabled = false
         }
         release {
-            signingConfig = signingConfigs.getByName("test")
+            // Release signing must be supplied privately, never with the shared test key.
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -50,6 +54,7 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += listOf("-opt-in=androidx.media3.common.util.UnstableApi")
     }
 
     buildFeatures {
@@ -65,6 +70,9 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
     val media3 = "1.5.1"
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
@@ -83,6 +91,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
