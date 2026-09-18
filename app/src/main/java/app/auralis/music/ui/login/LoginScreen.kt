@@ -1,0 +1,249 @@
+package app.auralis.music.ui.login
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.auralis.music.data.auth.AuthMode
+import app.auralis.music.data.auth.StoredCredentials
+import app.auralis.music.data.remote.SubsonicException
+import app.auralis.music.ui.components.GlassSurface
+import app.auralis.music.ui.theme.LocalContainer
+import app.auralis.music.ui.theme.LocalPalette
+import kotlinx.coroutines.launch
+
+@Composable
+fun LoginScreen() {
+    val p = LocalPalette.current
+    val container = LocalContainer.current
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var showApiKey by remember { mutableStateOf(false) }
+    var showPassword by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var httpWarning by remember { mutableStateOf(false) }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = p.primary,
+        unfocusedBorderColor = p.outline,
+        focusedLabelColor = p.primary,
+        unfocusedLabelColor = p.onBackground.copy(alpha = 0.5f),
+        cursorColor = p.primary,
+        focusedTextColor = p.onBackground,
+        unfocusedTextColor = p.onBackground,
+    )
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(88.dp)
+                .clip(CircleShape)
+                .background(p.primary.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("A", color = p.primary, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Auralis", color = p.onBackground, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Navidrome · Subsonic · OpenSubsonic",
+            color = p.onBackground.copy(alpha = 0.55f),
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(28.dp))
+        GlassSurface(Modifier.fillMaxWidth(), radius = 28.dp) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = {
+                    url = it
+                    httpWarning = it.trim().startsWith("http://")
+                },
+                label = { Text("Server URL") },
+                placeholder = { Text("https://music.example.com") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = fieldColors,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                shape = RoundedCornerShape(16.dp),
+            )
+            if (httpWarning) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "HTTP is allowed for LAN servers. Credentials still use a salted token, never plaintext. Prefer HTTPS when possible.",
+                    color = p.secondary,
+                    fontSize = 12.sp,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            if (!showApiKey) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors,
+                    shape = RoundedCornerShape(16.dp),
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors,
+                    shape = RoundedCornerShape(16.dp),
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                if (showPassword) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (showPassword) "Hide password" else "Show password",
+                                tint = p.onBackground.copy(alpha = 0.6f),
+                            )
+                        }
+                    },
+                )
+            } else {
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API key") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors,
+                    shape = RoundedCornerShape(16.dp),
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                )
+            }
+            TextButton(onClick = { showApiKey = !showApiKey }) {
+                Text(
+                    if (showApiKey) "Use username & password" else "Use OpenSubsonic API key",
+                    color = p.primary,
+                )
+            }
+            if (error != null) {
+                Text(error!!, color = Color(0xFFFF8A80), fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+            }
+            Button(
+                onClick = {
+                    error = null
+                    loading = true
+                    scope.launch {
+                        try {
+                            val normalized = normalizeUrl(url)
+                            val creds = if (showApiKey) {
+                                StoredCredentials(
+                                    serverUrl = normalized,
+                                    apiKey = apiKey.trim(),
+                                    authMode = AuthMode.ApiKey,
+                                )
+                            } else {
+                                StoredCredentials(
+                                    serverUrl = normalized,
+                                    username = username.trim(),
+                                    password = password,
+                                    authMode = AuthMode.Token,
+                                )
+                            }
+                            val (stored, _) = container.client.login(creds)
+                            container.credentials.save(stored)
+                            container.player.transcodeBitrate = stored.transcodeBitrate
+                            container.setLoggedIn(true)
+                        } catch (e: SubsonicException) {
+                            error = humanError(e)
+                        } catch (e: Exception) {
+                            error = e.message ?: "Could not connect"
+                        } finally {
+                            loading = false
+                        }
+                    }
+                },
+                enabled = !loading && url.isNotBlank() && (showApiKey && apiKey.isNotBlank() || !showApiKey && username.isNotBlank() && password.isNotBlank()),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = p.primary, contentColor = p.onPrimary),
+            ) {
+                if (loading) CircularProgressIndicator(Modifier.size(22.dp), color = p.onPrimary, strokeWidth = 2.dp)
+                else Text("Connect", fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Passwords are stored in Android Keystore and never sent in plaintext. Token auth (MD5 password+salt) is used unless the server requires LDAP hex encoding or an API key.",
+            color = p.onBackground.copy(alpha = 0.4f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+    }
+}
+
+private fun normalizeUrl(raw: String): String {
+    var s = raw.trim().trimEnd('/')
+    if (!s.startsWith("http://") && !s.startsWith("https://")) s = "https://$s"
+    if (s.endsWith("/rest")) s = s.removeSuffix("/rest")
+    return s
+}
+
+private fun humanError(e: SubsonicException): String = when (e.code) {
+    40 -> "Wrong username or password"
+    41 -> "Token auth is not supported on this account; retrying is handled automatically"
+    42 -> "This server does not support the selected login method"
+    43 -> "Conflicting login parameters"
+    44 -> "Invalid API key"
+    else -> e.message ?: "Login failed"
+}
