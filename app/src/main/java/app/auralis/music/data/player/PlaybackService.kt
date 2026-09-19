@@ -17,10 +17,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.AudioSink
-import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -37,9 +34,9 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
     private var player: ExoPlayer? = null
     private var fadePlayer: ExoPlayer? = null
     private var session: MediaSession? = null
-    private var rgMain = ReplayGainProcessor()
-    private var rgFade = ReplayGainProcessor()
-    private val eq = GraphicEqProcessor()
+    private val eqMain = EqController()
+    private val eqFade = EqController()
+    private var rgLinear = 1f
     private lateinit var settings: PlayerSettings
     private val handler = Handler(Looper.getMainLooper())
     private var fadeAnim: ValueAnimator? = null
@@ -55,14 +52,13 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
     override fun onCreate() {
         super.onCreate()
         settings = PlayerSettings(this)
-        eq.enabled = settings.eqEnabled
-        eq.setGains(settings.eqGains)
         settings.register(this)
 
-        val exo = buildPlayer(rgMain)
+        val exo = buildPlayer()
         player = exo
         applyGapless(exo)
         applyDisconnectPolicy(exo)
+        attachEq(exo, eqMain)
 
         val openApp = PendingIntent.getActivity(
             this,
@@ -97,7 +93,10 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
             .build()
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                applyReplayGain(rgMain, mediaItem)
+                applyReplayGain(exo, mediaItem)
+            }
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                attachEq(exo, eqMain)
             }
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
@@ -111,7 +110,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
                 }
             }
         })
-        applyReplayGain(rgMain, exo.currentMediaItem)
+        applyReplayGain(exo, exo.currentMediaItem)
         setMediaNotificationProvider(AuralisNotificationProvider(this))
         handler.post(tick)
     }
@@ -122,10 +121,10 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         val exo = player ?: return
         when (key) {
             PlayerSettings.EQ_ON, PlayerSettings.EQ_GAINS, PlayerSettings.EQ_PRESET -> {
-                eq.enabled = settings.eqEnabled
-                eq.setGains(settings.eqGains)
+                eqMain.apply(settings)
+                eqFade.apply(settings)
             }
-            PlayerSettings.RG_MODE, PlayerSettings.RG_LIMIT -> applyReplayGain(rgMain, exo.currentMediaItem)
+            PlayerSettings.RG_MODE, PlayerSettings.RG_LIMIT -> applyReplayGain(exo, exo.currentMediaItem)
             PlayerSettings.GAPLESS, PlayerSettings.CROSSFADE -> {
                 if (!settings.gapless) cancelCrossfade()
                 applyGapless(exo)
@@ -143,29 +142,18 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
             release()
         }
         fadePlayer?.release()
+        eqMain.release()
+        eqFade.release()
         session = null
         player = null
         fadePlayer = null
         super.onDestroy()
     }
 
-    private fun buildPlayer(rg: ReplayGainProcessor): ExoPlayer {
+    private fun buildPlayer(): ExoPlayer {
         val http = OkHttpDataSource.Factory((application as AuralisApp).container.client.http)
             .setUserAgent("Auralis/${app.auralis.music.BuildConfig.VERSION_NAME}")
-        val renderers = object : DefaultRenderersFactory(this) {
-            override fun buildAudioSink(
-                context: Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean,
-            ): AudioSink {
-                return DefaultAudioSink.Builder(context)
-                    .setEnableFloatOutput(enableFloatOutput)
-                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(arrayOf(eq, rg))
-                    .build()
-            }
-        }
-        return ExoPlayer.Builder(this, renderers)
+        return ExoPlayer.Builder(this)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(this)
                     .setDataSourceFactory(DefaultDataSource.Factory(this, http)),
@@ -197,13 +185,18 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         fadePlayer?.setHandleAudioBecomingNoisy(settings.pauseOnDisconnect)
     }
 
-    private fun applyReplayGain(rg: ReplayGainProcessor, item: MediaItem?) {
-        rg.limiter = settings.peakLimiter
-        rg.linearGain = ReplayGainProcessor.fromExtras(
+    private fun attachEq(exo: ExoPlayer, eq: EqController) {
+        eq.attach(exo.audioSessionId, settings)
+    }
+
+    private fun applyReplayGain(exo: ExoPlayer, item: MediaItem?) {
+        if (fading) return
+        rgLinear = ReplayGainProcessor.fromExtras(
             item?.mediaMetadata?.extras,
             settings.replayGainMode,
             settings.peakLimiter,
         )
+        exo.volume = replayGainToPlayerVolume(rgLinear)
     }
 
     private fun maybeStartCrossfade() {
@@ -225,33 +218,40 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         if (nextIndex == C.INDEX_UNSET) return
         fading = true
         val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
-        val next = buildPlayer(rgFade)
+        val next = buildPlayer()
         fadePlayer = next
         applyDisconnectPolicy(next)
-        applyReplayGain(rgFade, items[nextIndex])
+        attachEq(next, eqFade)
+        val nextGain = replayGainToPlayerVolume(
+            ReplayGainProcessor.fromExtras(
+                items[nextIndex].mediaMetadata.extras,
+                settings.replayGainMode,
+                settings.peakLimiter,
+            ),
+        )
+        val fromGain = replayGainToPlayerVolume(rgLinear)
         from.pauseAtEndOfMediaItems = true
         next.setMediaItems(items, nextIndex, 0L)
         next.volume = 0f
         next.prepare()
         next.play()
-        val startFrom = from.volume
         fadeAnim?.cancel()
         fadeAnim = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = fadeMs.coerceAtLeast(200L)
             addUpdateListener { a ->
                 val t = a.animatedValue as Float
-                from.volume = startFrom * (1f - t)
-                next.volume = t
+                from.volume = fromGain * (1f - t)
+                next.volume = nextGain * t
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
-                    finishCrossfade(from, next)
+                    finishCrossfade(from, next, nextGain)
                 }
                 override fun onAnimationCancel(animation: android.animation.Animator) {
                     next.stop()
                     next.release()
                     if (fadePlayer === next) fadePlayer = null
-                    from.volume = 1f
+                    from.volume = fromGain
                     fading = false
                 }
             })
@@ -259,7 +259,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         }
     }
 
-    private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer) {
+    private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextGain: Float) {
         if (player !== from) {
             next.release()
             fading = false
@@ -270,16 +270,19 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         fadePlayer = null
         from.stop()
         from.release()
-        next.volume = 1f
-        rgMain = rgFade
-        rgFade = ReplayGainProcessor()
+        next.volume = nextGain
+        rgLinear = nextGain
         fading = false
         next.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                applyReplayGain(rgMain, mediaItem)
+                applyReplayGain(next, mediaItem)
+            }
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                attachEq(next, eqMain)
             }
         })
-        applyReplayGain(rgMain, next.currentMediaItem)
+        attachEq(next, eqMain)
+        applyReplayGain(next, next.currentMediaItem)
     }
 
     private fun cancelCrossfade() {
@@ -290,7 +293,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
             it.release()
         }
         fadePlayer = null
-        player?.volume = 1f
+        player?.volume = replayGainToPlayerVolume(rgLinear)
         fading = false
     }
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 — 2026-09-18
+
+### Fixed
+- Playback failed on 1.1.0. Custom EQ/ReplayGain audio processors sat in ExoPlayer’s sink and aborted original/hi-res streams. EQ now attaches to the audio session (DynamicsProcessing / platform equalizer); ReplayGain/R128 and the peak limiter apply as output gain.
+
 ## 1.1.0 — 2026-09-18
 
 Playback and listening tools.

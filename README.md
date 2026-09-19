@@ -2,7 +2,7 @@
 
 Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.1.0** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.1.1** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
