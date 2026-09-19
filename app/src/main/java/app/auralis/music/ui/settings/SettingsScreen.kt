@@ -210,19 +210,8 @@ fun SettingsScreen(
             if (eqOn) {
                 Spacer(Modifier.height(8.dp))
                 Text("Presets", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Hint("General curves plus AutoEq-style headphone targets.")
-                var lastGroup = ""
+                Hint("Genre and speaker curves. Drag a band to make a custom curve.")
                 EqPresets.all.forEach { preset ->
-                    if (preset.group != lastGroup) {
-                        lastGroup = preset.group
-                        Text(
-                            preset.group.uppercase(),
-                            color = p.onBackground.copy(alpha = 0.45f),
-                            fontSize = 11.sp,
-                            letterSpacing = 1.sp,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-                        )
-                    }
                     RadioRow(
                         selected = eqPreset == preset.id,
                         label = preset.name,

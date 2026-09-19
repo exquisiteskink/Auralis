@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 — 2026-09-18
+
+### Removed
+- AutoEq-style headphone targets from the equalizer. The 10-band EQ and general presets remain.
+
 ## 1.1.1 — 2026-09-18
 
 ### Fixed

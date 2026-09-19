@@ -3,6 +3,7 @@ package app.auralis.music.data.player
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.os.Build
+import androidx.annotation.RequiresApi
 import kotlin.math.log10
 import kotlin.math.pow
 
@@ -48,19 +49,7 @@ class EqController {
         val gains = settings.eqGains
         val on = settings.eqEnabled
         dynamics?.let { dp ->
-            runCatching {
-                dp.enabled = on
-                if (!on) return
-                val pre = dp.getPreEqByChannelIndex(0)
-                val n = pre.bandCount.coerceAtMost(10)
-                for (i in 0 until n) {
-                    val band = pre.getBand(i)
-                    band.isEnabled = true
-                    band.cutoffFrequency = EqPresets.BANDS_HZ[i].toFloat()
-                    band.gain = gains[i]
-                    dp.setPreEqBandAllChannelsTo(i, band)
-                }
-            }
+            if (Build.VERSION.SDK_INT >= 28) applyDynamics(dp, gains, on)
             return
         }
         equalizer?.let { eq ->
@@ -76,6 +65,23 @@ class EqController {
                     val millibel = (db * 100f).toInt().coerceIn(min, max).toShort()
                     eq.setBandLevel(b.toShort(), millibel)
                 }
+            }
+        }
+    }
+
+    @RequiresApi(28)
+    private fun applyDynamics(dp: DynamicsProcessing, gains: FloatArray, on: Boolean) {
+        runCatching {
+            dp.enabled = on
+            if (!on) return
+            val pre = dp.getPreEqByChannelIndex(0)
+            val n = pre.bandCount.coerceAtMost(10)
+            for (i in 0 until n) {
+                val band = pre.getBand(i)
+                band.isEnabled = true
+                band.cutoffFrequency = EqPresets.BANDS_HZ[i].toFloat()
+                band.gain = gains[i]
+                dp.setPreEqBandAllChannelsTo(i, band)
             }
         }
     }

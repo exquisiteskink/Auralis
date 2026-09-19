@@ -45,7 +45,11 @@ class PlayerSettings(context: Context) {
         set(value) { prefs.edit().putBoolean(EQ_ON, value).apply() }
 
     var eqPreset: String
-        get() = prefs.getString(EQ_PRESET, EqPresets.FLAT.id) ?: EqPresets.FLAT.id
+        get() {
+            val id = prefs.getString(EQ_PRESET, EqPresets.FLAT.id) ?: EqPresets.FLAT.id
+            if (id == "custom" || EqPresets.all.any { it.id == id }) return id
+            return "custom"
+        }
         set(value) { prefs.edit().putString(EQ_PRESET, value).apply() }
 
     var eqGains: FloatArray
