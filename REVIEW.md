@@ -39,7 +39,7 @@ Run with JDK 17 and Android SDK 35:
 
 The regression suite covers LAN classification, malformed base URLs, cross-port credential redirects, same-origin redirects/loops, invalid TLS certificates and hostnames, token/API-key authentication, failed password fallback, cancellation, oversized chunked bodies, original/transcoded parameters, metadata isolation, JSON nulls, shuffled duplicate queue entries, and favorite overrides.
 
-Verified result: **17 tests passed; lint passed with 0 errors and 28 warnings; debug and unsigned-release APK builds succeeded.** The debug APK's v2 signature was verified with Android `apksigner`. `git diff --check` passed.
+Verified result: **20 tests passed; lint passed with 0 errors and 30 warnings; debug and unsigned-release APK builds succeeded.** The debug APK's v2 signature was verified with Android `apksigner`. `git diff --check` passed.
 
 Artifacts: `app/build/outputs/apk/debug/app-debug.apk` (installable test build) and `app/build/outputs/apk/release/app-release-unsigned.apk` (requires private release signing).
 

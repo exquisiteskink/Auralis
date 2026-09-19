@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.auralis.music.data.remote.AlbumWithSongs
+import app.auralis.music.data.remote.Song
 import app.auralis.music.data.remote.formatDuration
 import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.ErrorText
@@ -43,6 +44,23 @@ import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.LocalClient
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
+
+internal data class DiscSection(
+    val number: Int,
+    val songs: List<Song>,
+)
+
+internal fun albumDiscSections(songs: List<Song>): List<DiscSection> =
+    songs
+        .sortedWith(
+            compareBy<Song>(
+                { it.discNumber.coerceAtLeast(1) },
+                { if (it.track > 0) it.track else Int.MAX_VALUE },
+                { it.title },
+            ),
+        )
+        .groupBy { it.discNumber.coerceAtLeast(1) }
+        .map { (number, tracks) -> DiscSection(number, tracks) }
 
 @Composable
 fun AlbumScreen(
@@ -72,9 +90,12 @@ fun AlbumScreen(
         return
     }
 
-    val songs = current.song.sortedWith(compareBy({ it.discNumber }, { it.track }, { it.title }))
+    val discSections = albumDiscSections(current.song)
+    val songs = discSections.flatMap(DiscSection::songs)
+    val showDiscHeaders = discSections.size > 1 || discSections.any { it.number > 1 }
     val stats = buildString {
         append("${songs.size} tracks")
+        if (discSections.size > 1) append("  –  ${discSections.size} discs")
         if (current.duration > 0) append("  –  ${formatDuration(current.duration)}")
     }
 
@@ -125,14 +146,29 @@ fun AlbumScreen(
                     .background(p.onBackground.copy(alpha = 0.22f)),
             )
         }
-        itemsIndexed(songs) { i, song ->
-            SongRow(
-                song = song,
-                showArtist = true,
-                showCover = false,
-                rank = if (song.track > 0) song.track else i + 1,
-                onClick = { player.play(songs, i) },
-            )
+        var queueOffset = 0
+        discSections.forEach { section ->
+            val sectionOffset = queueOffset
+            if (showDiscHeaders) {
+                item(key = "disc-${section.number}") {
+                    Text(
+                        "Disc ${section.number}",
+                        color = p.onBackground.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+                    )
+                }
+            }
+            itemsIndexed(section.songs, key = { _, song -> song.id }) { sectionIndex, song ->
+                SongRow(
+                    song = song,
+                    showArtist = true,
+                    showCover = false,
+                    rank = if (song.track > 0) song.track else sectionIndex + 1,
+                    onClick = { player.play(songs, sectionOffset + sectionIndex) },
+                )
+            }
+            queueOffset += section.songs.size
         }
         item {
             current.artist?.takeIf { it.isNotBlank() }?.let { artistName ->

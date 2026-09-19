@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3 — 2026-09-19
+
+### Added
+- Multi-disc album support. Album pages now separate and label discs, keep disc and track order in the playback queue, and handle untagged tracks as disc 1.
+
 ## 1.1.2 — 2026-09-18
 
 ### Removed
