@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4 — 2026-09-19
+
+### Changed
+- Made the mini-player, now-playing, and queue transitions continuous and velocity-aware.
+- Kept navigation and screen layout stable while the player moves, avoiding the mid-animation jump.
+- Isolated playback-position updates and deferred queue rendering to reduce animation-frame work.
+
 ## 1.1.3 — 2026-09-19
 
 ### Added

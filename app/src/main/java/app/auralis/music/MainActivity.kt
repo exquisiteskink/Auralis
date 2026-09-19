@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -83,7 +84,10 @@ class MainActivity : ComponentActivity() {
             val prefs = remember { AppearancePrefs(this) }
             var themeMode by remember { mutableStateOf(prefs.themeMode) }
             var transcode by remember { mutableIntStateOf(prefs.transcode) }
-            val playerState by container.player.state.collectAsState()
+            val playerState = container.player.state.collectAsState()
+            val playerPalette by remember(playerState) {
+                androidx.compose.runtime.derivedStateOf { playerState.value.palette }
+            }
             val loggedIn by container.loggedIn.collectAsState()
             val systemDark = isSystemInDarkTheme()
             val dark = when (themeMode) {
@@ -98,7 +102,7 @@ class MainActivity : ComponentActivity() {
                 container.restoreSession()
             }
 
-            val palette = playerState.palette.let { pal ->
+            val palette = playerPalette.let { pal ->
                 if (pal.isDark == dark) pal
                 else if (dark) AuralisPalette.darkDefault()
                 else AuralisPalette.lightDefault()
@@ -155,12 +159,15 @@ private fun AuralisRoot(
     val nav = androidx.compose.runtime.key(loggedIn) { rememberNavController() }
     val p = LocalPalette.current
     val container = LocalContainer.current
-    val playerState by container.player.state.collectAsState()
+    val playerState = container.player.state.collectAsState()
+    val hasCurrentSong by remember(playerState) {
+        androidx.compose.runtime.derivedStateOf { playerState.value.current != null }
+    }
     val sheet = remember { mutableFloatStateOf(0f) }
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
     val onTabs = route in tabs.map { it.route }
-    val showNav = loggedIn && onTabs && sheet.floatValue < 0.45f
+    val showNav = loggedIn && onTabs
 
     LaunchedEffect(loggedIn) {
         sheet.floatValue = 0f
@@ -177,7 +184,16 @@ private fun AuralisRoot(
             containerColor = Color.Transparent,
             bottomBar = {
                 if (showNav) {
-                    Column(Modifier.fillMaxWidth().background(p.background)) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val progress = sheet.floatValue
+                                translationY = size.height * progress
+                                alpha = 1f - progress
+                            }
+                            .background(p.background),
+                    ) {
                         NavigationBar(
                             containerColor = p.background,
                             contentColor = p.onBackground,
@@ -317,7 +333,7 @@ private fun AuralisRoot(
             }
         }
 
-        if (loggedIn && playerState.current != null) {
+        if (loggedIn && hasCurrentSong) {
             NowPlayingHost(
                 sheet = sheet,
                 onArtist = { nav.navigate("artist/${encode(it)}") },

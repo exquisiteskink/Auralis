@@ -1,14 +1,17 @@
 package app.auralis.music.ui.player
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.splineBasedDecay
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -47,22 +50,24 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -81,199 +86,159 @@ import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.ui.theme.UltraBlurBackground
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
+private enum class PlayerSheetValue { Collapsed, Player, Queue }
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NowPlayingHost(
-    sheet: MutableState<Float>,
+    sheet: MutableFloatState,
     onArtist: (String) -> Unit,
     bottomNavVisible: Boolean,
 ) {
     val player = LocalPlayer.current
-    val ui by player.state.collectAsState()
-    val song = ui.current ?: return
+    val playerState = player.state.collectAsState()
+    val ui by remember(playerState) {
+        derivedStateOf { playerState.value.copy(positionMs = 0L) }
+    }
+    val position = remember(playerState) {
+        derivedStateOf { playerState.value.positionMs }
+    }
+    if (ui.current == null) return
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val navVisible = rememberUpdatedState(bottomNavVisible)
-
-    var expand by remember { mutableFloatStateOf(sheet.value.coerceIn(0f, 1f)) }
-    var queue by remember { mutableFloatStateOf(0f) }
-    val expandAnim = remember { Animatable(expand) }
-    val queueAnim = remember { Animatable(0f) }
-    var settleJob by remember { mutableStateOf<Job?>(null) }
-
-    LaunchedEffect(expand) { sheet.value = expand }
-
-    fun cancelSettle() {
-        settleJob?.cancel()
-        settleJob = null
-    }
-
-    fun settleExpand(target: Float) {
-        cancelSettle()
-        val dest = target.coerceIn(0f, 1f)
-        settleJob = scope.launch {
-            expandAnim.snapTo(expand)
-            expandAnim.animateTo(dest, spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) {
-                expand = value
-            }
-            expand = dest
-            if (dest == 0f) {
-                queue = 0f
-                queueAnim.snapTo(0f)
-            }
-        }
-    }
-
-    fun settleQueue(target: Float) {
-        cancelSettle()
-        val dest = target.coerceIn(0f, 1f)
-        settleJob = scope.launch {
-            queueAnim.snapTo(queue)
-            queueAnim.animateTo(dest, spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow)) {
-                queue = value
-            }
-            queue = dest
-        }
-    }
-
-    BackHandler(enabled = expand > 0.2f) {
-        if (queue > 0.4f) settleQueue(0f) else settleExpand(0f)
+    var queueComposed by remember { mutableStateOf(false) }
+    val sheetState = remember(density) {
+        AnchoredDraggableState(
+            initialValue = PlayerSheetValue.Collapsed,
+            positionalThreshold = { distance -> distance * 0.45f },
+            velocityThreshold = { with(density) { 900.dp.toPx() } },
+            snapAnimationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+            decayAnimationSpec = splineBasedDecay(density),
+            confirmValueChange = { target -> target != PlayerSheetValue.Queue || queueComposed },
+        )
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val fling = with(density) { 900.dp.toPx() }
+        val anchors = remember(heightPx) {
+            DraggableAnchors {
+                PlayerSheetValue.Collapsed at heightPx
+                PlayerSheetValue.Player at 0f
+                PlayerSheetValue.Queue at -heightPx
+            }
+        }
+        SideEffect { sheetState.updateAnchors(anchors) }
 
-        val overlayDrag = rememberDraggableState { delta ->
-            cancelSettle()
-            if (expand > 0.97f && (queue > 0.02f || delta < 0f)) {
-                queue = (queue - delta / heightPx).coerceIn(0f, 1f)
+        LaunchedEffect(sheetState, heightPx) {
+            snapshotFlow { sheetState.offset }
+                .collect { offset ->
+                    if (offset.isFinite()) {
+                        sheet.floatValue = (1f - offset / heightPx).coerceIn(0f, 1f)
+                    }
+                }
+        }
+        LaunchedEffect(sheetState) {
+            snapshotFlow { sheetState.settledValue }
+                .distinctUntilChanged()
+                .collect { settled ->
+                    queueComposed = settled != PlayerSheetValue.Collapsed
+                }
+        }
+
+        val handlesBack by remember(sheetState, heightPx) {
+            derivedStateOf { sheetState.offset.isFinite() && sheetState.offset < heightPx * 0.8f }
+        }
+        val playerDragEnabled by remember(sheetState, heightPx) {
+            derivedStateOf { !sheetState.offset.isFinite() || sheetState.offset > -heightPx * 0.35f }
+        }
+        BackHandler(enabled = handlesBack) {
+            val target = if (sheetState.offset < -heightPx * 0.35f) {
+                PlayerSheetValue.Player
             } else {
-                expand = (expand - delta / heightPx).coerceIn(0f, 1f)
-                if (expand < 0.98f) queue = 0f
+                PlayerSheetValue.Collapsed
             }
+            scope.launch { sheetState.animateTo(target) }
         }
 
-        val miniDrag = rememberDraggableState { delta ->
-            cancelSettle()
-            expand = (expand - delta / heightPx).coerceIn(0f, 1f)
-        }
-
-        val queueHeaderDrag = rememberDraggableState { delta ->
-            if (delta > 0f) {
-                cancelSettle()
-                queue = (queue - delta / heightPx).coerceIn(0f, 1f)
-            }
-        }
-
-        val queueDismiss = remember(heightPx, fling) {
+        val queueDismiss = remember(sheetState) {
             object : NestedScrollConnection {
                 override fun onPostScroll(
                     consumed: Offset,
                     available: Offset,
                     source: NestedScrollSource,
                 ): Offset {
-                    if (available.y > 0f) {
-                        cancelSettle()
-                        queue = (queue - available.y / heightPx).coerceIn(0f, 1f)
-                        return Offset(0f, available.y)
+                    if (available.y > 0f && sheetState.offset < 0f) {
+                        val consumed = sheetState.dispatchRawDelta(available.y)
+                        return Offset(0f, consumed)
                     }
                     return Offset.Zero
                 }
 
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                    if (available.y > fling || queue < 0.72f) {
-                        settleQueue(if (available.y > fling || queue < 0.55f) 0f else 1f)
-                        return available
+                    if (sheetState.offset < 0f) {
+                        val consumedY = sheetState.settle(available.y)
+                        return Velocity(0f, consumedY)
                     }
-                    settleQueue(1f)
                     return Velocity.Zero
                 }
             }
         }
 
-        if (expand < 0.98f) {
-            MiniBar(
-                ui = ui,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = if (navVisible.value) 80.dp else 0.dp)
-                    .navigationBarsPadding()
-                    .draggable(
-                        state = miniDrag,
-                        orientation = Orientation.Vertical,
-                        onDragStopped = { velocity ->
-                            val open = when {
-                                velocity < -fling -> true
-                                velocity > fling -> false
-                                else -> expand >= 0.18f
-                            }
-                            settleExpand(if (open) 1f else 0f)
-                        },
-                    )
-                    .clickable { settleExpand(1f) },
-                onPlayPause = { player.playPause() },
-            )
-        }
+        PositionAwareMiniBar(
+            ui = ui,
+            position = position,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = if (bottomNavVisible) 80.dp else 0.dp)
+                .navigationBarsPadding()
+                .anchoredDraggable(sheetState, Orientation.Vertical)
+                .clickable { scope.launch { sheetState.animateTo(PlayerSheetValue.Player) } },
+            onPlayPause = { player.playPause() },
+        )
 
-        if (expand > 0.01f) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .offset { IntOffset(0, ((1f - expand) * heightPx).toInt()) }
-                    .draggable(
-                        state = overlayDrag,
-                        orientation = Orientation.Vertical,
-                        enabled = queue < 0.35f,
-                        onDragStopped = { velocity ->
-                            if (queue > 0.03f) {
-                                val open = when {
-                                    velocity < -fling -> true
-                                    velocity > fling -> false
-                                    else -> queue >= 0.45f
-                                }
-                                settleQueue(if (open) 1f else 0f)
-                            } else {
-                                val open = when {
-                                    velocity < -fling -> true
-                                    velocity > fling -> false
-                                    else -> expand >= 0.45f
-                                }
-                                settleExpand(if (open) 1f else 0f)
-                            }
-                        },
-                    ),
-            ) {
-                UltraBlurBackground(Modifier.fillMaxSize())
-                NowPlayingPage(
-                    ui = ui,
-                    onArtist = {
-                        onArtist(it)
-                        settleExpand(0f)
-                    },
-                    onClose = { settleExpand(0f) },
-                    onOpenQueue = { settleQueue(1f) },
-                )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = sheetState.offset.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: heightPx
+                }
+                .anchoredDraggable(sheetState, Orientation.Vertical, enabled = playerDragEnabled),
+        ) {
+            UltraBlurBackground(Modifier.fillMaxSize())
+            PositionAwareNowPlayingPage(
+                ui = ui,
+                position = position,
+                onArtist = {
+                    onArtist(it)
+                    scope.launch { sheetState.animateTo(PlayerSheetValue.Collapsed) }
+                },
+                onClose = { scope.launch { sheetState.animateTo(PlayerSheetValue.Collapsed) } },
+                onOpenQueue = {
+                    queueComposed = true
+                    scope.launch {
+                        withFrameNanos { }
+                        sheetState.animateTo(PlayerSheetValue.Queue)
+                    }
+                },
+            )
+            if (queueComposed) {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .offset { IntOffset(0, ((1f - queue) * heightPx).toInt()) }
-                        .then(if (queue > 0.02f) Modifier.nestedScroll(queueDismiss) else Modifier),
+                        .graphicsLayer {
+                            val offset = sheetState.offset.takeIf { it.isFinite() } ?: 0f
+                            translationY = heightPx + offset.coerceAtMost(0f)
+                        }
+                        .nestedScroll(queueDismiss),
                 ) {
                     UltraBlurBackground(Modifier.fillMaxSize())
                     QueuePage(
                         ui = ui,
-                        onClose = { settleQueue(0f) },
-                        headerModifier = Modifier.draggable(
-                            state = queueHeaderDrag,
-                            orientation = Orientation.Vertical,
-                            onDragStopped = { velocity ->
-                                val close = velocity > fling || queue < 0.72f
-                                settleQueue(if (close) 0f else 1f)
-                            },
-                        ),
+                        onClose = { scope.launch { sheetState.animateTo(PlayerSheetValue.Player) } },
+                        headerModifier = Modifier.anchoredDraggable(sheetState, Orientation.Vertical),
                     )
                 }
             }
@@ -282,8 +247,26 @@ fun NowPlayingHost(
 }
 
 @Composable
+private fun PositionAwareNowPlayingPage(
+    ui: PlayerUiState,
+    position: State<Long>,
+    onArtist: (String) -> Unit,
+    onClose: () -> Unit,
+    onOpenQueue: () -> Unit,
+) {
+    NowPlayingPage(
+        ui = ui,
+        positionMs = position.value,
+        onArtist = onArtist,
+        onClose = onClose,
+        onOpenQueue = onOpenQueue,
+    )
+}
+
+@Composable
 private fun NowPlayingPage(
     ui: PlayerUiState,
+    positionMs: Long,
     onArtist: (String) -> Unit,
     onClose: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -309,7 +292,7 @@ private fun NowPlayingPage(
             if (showLyrics) {
                 LyricsPane(
                     lyrics = ui.lyrics,
-                    positionMs = ui.positionMs,
+                    positionMs = positionMs,
                     modifier = Modifier.size(artSize),
                     onClose = { showLyrics = false },
                 )
@@ -331,14 +314,14 @@ private fun NowPlayingPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                formatDurationMs(ui.positionMs),
+                formatDurationMs(positionMs),
                 color = p.onBackground.copy(alpha = 0.85f),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.width(40.dp),
             )
             WaveformSeekBar(
-                positionMs = ui.positionMs,
+                positionMs = positionMs,
                 durationMs = ui.durationMs,
                 seed = song.id,
                 onSeek = { ms -> player.seek(ms) },
@@ -572,14 +555,30 @@ private fun QueuePage(
 }
 
 @Composable
+private fun PositionAwareMiniBar(
+    ui: PlayerUiState,
+    position: State<Long>,
+    modifier: Modifier = Modifier,
+    onPlayPause: () -> Unit,
+) {
+    MiniBar(
+        ui = ui,
+        positionMs = position.value,
+        modifier = modifier,
+        onPlayPause = onPlayPause,
+    )
+}
+
+@Composable
 private fun MiniBar(
     ui: PlayerUiState,
+    positionMs: Long,
     modifier: Modifier = Modifier,
     onPlayPause: () -> Unit,
 ) {
     val p = LocalPalette.current
     val song = ui.current ?: return
-    val progress = if (ui.durationMs > 0) (ui.positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f) else 0f
+    val progress = if (ui.durationMs > 0) (positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f) else 0f
     Column(
         modifier
             .fillMaxWidth()
