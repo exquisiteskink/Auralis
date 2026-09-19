@@ -36,8 +36,12 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -64,6 +68,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -286,6 +291,7 @@ private fun NowPlayingPage(
     val player = LocalPlayer.current
     val p = LocalPalette.current
     val song = ui.current ?: return
+    var showLyrics by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         Modifier
@@ -300,14 +306,24 @@ private fun NowPlayingPage(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.weight(1f))
-            CoverArt(
-                coverId = song.coverArt,
-                modifier = Modifier
-                    .size(artSize)
-                    .shadow(18.dp, RoundedCornerShape(12.dp)),
-                contentDescription = song.title,
-                corner = 12.dp,
-            )
+            if (showLyrics) {
+                LyricsPane(
+                    lyrics = ui.lyrics,
+                    positionMs = ui.positionMs,
+                    modifier = Modifier.size(artSize),
+                    onClose = { showLyrics = false },
+                )
+            } else {
+                CoverArt(
+                    coverId = song.coverArt,
+                    modifier = Modifier
+                        .size(artSize)
+                        .shadow(18.dp, RoundedCornerShape(12.dp))
+                        .clickable { showLyrics = true },
+                    contentDescription = song.title,
+                    corner = 12.dp,
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
         Row(
@@ -368,7 +384,9 @@ private fun NowPlayingPage(
                 codec = song.codecLabel,
                 sampleRate = song.sampleRateLabel,
                 favorite = ui.isFavorite(song),
+                lyricsOpen = showLyrics,
                 onToggleFavorite = { player.toggleFavorite(song) },
+                onToggleLyrics = { showLyrics = !showLyrics },
             )
 
             Spacer(Modifier.height(18.dp))
@@ -394,7 +412,9 @@ private fun MetaRow(
     codec: String?,
     sampleRate: String?,
     favorite: Boolean,
+    lyricsOpen: Boolean,
     onToggleFavorite: () -> Unit,
+    onToggleLyrics: () -> Unit,
 ) {
     val p = LocalPalette.current
     val mute = p.onBackground.copy(alpha = 0.45f)
@@ -405,7 +425,15 @@ private fun MetaRow(
     ) {
         if (!codec.isNullOrBlank()) {
             Text(codec, color = mute, fontSize = 13.sp, letterSpacing = 1.4.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(12.dp))
+        }
+        IconButton(onClick = onToggleLyrics, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Rounded.Lyrics,
+                contentDescription = if (lyricsOpen) "Hide lyrics" else "Show lyrics",
+                tint = if (lyricsOpen) p.primary else mute,
+                modifier = Modifier.size(22.dp),
+            )
         }
         IconButton(onClick = onToggleFavorite, modifier = Modifier.size(36.dp)) {
             Icon(
@@ -416,8 +444,59 @@ private fun MetaRow(
             )
         }
         if (!sampleRate.isNullOrBlank()) {
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(12.dp))
             Text(sampleRate, color = mute, fontSize = 13.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun LyricsPane(
+    lyrics: app.auralis.music.data.remote.SongLyrics?,
+    positionMs: Long,
+    modifier: Modifier = Modifier,
+    onClose: () -> Unit,
+) {
+    val p = LocalPalette.current
+    val lines = lyrics?.lines.orEmpty()
+    val t = positionMs - (lyrics?.offsetMs ?: 0)
+    val active = if (lyrics?.synced == true && lines.isNotEmpty()) {
+        lines.indexOfLast { it.start <= t }.coerceAtLeast(0)
+    } else -1
+    val listState = rememberLazyListState()
+    LaunchedEffect(active) {
+        if (active >= 0) runCatching { listState.animateScrollToItem(active.coerceAtLeast(0)) }
+    }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(p.surface.copy(alpha = 0.55f))
+            .clickable(onClick = onClose)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        if (lines.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "No lyrics on the server for this track",
+                    color = p.onBackground.copy(alpha = 0.55f),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        } else {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(lines) { i, line ->
+                    val current = i == active
+                    Text(
+                        line.value,
+                        color = p.onBackground.copy(alpha = if (current) 1f else 0.42f),
+                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = if (current) 18.sp else 15.sp,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
         }
     }
 }

@@ -2,17 +2,17 @@
 
 Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.0.1** is the current public release.
+**Version 1.1.0** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
-1. Download `Auralis-1.0.1.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases).
+1. Download `Auralis-1.1.0.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases).
 2. On your phone, allow installing from the app you use to open the file.
 3. Open the APK and install.
 
 Android 8.0 (API 26) or later is required. You also need a reachable Navidrome, Subsonic, or OpenSubsonic server.
 
-If you already had a 0.1.x or 1.0.0 build, you can install 1.0.1 over it when both were signed with the same local debug key. If Android refuses the update, uninstall the old build first (this signs you out). 1.0.0 could sign in but not play; 1.0.1 fixes that.
+You can install 1.1.0 over 1.0.1 when both were signed with the same key. If Android refuses the update, uninstall the old build first (this signs you out).
 
 ## What it does
 
@@ -21,8 +21,8 @@ If you already had a 0.1.x or 1.0.0 build, you can install 1.0.1 over it when bo
 - **Artist page** — circular photo, play, albums, popular tracks, biography from your server, and similar artists that already exist in the library.
 - **Album and playlist pages** — cover, play/shuffle, numbered track list.
 - **Search** — artists, albums, songs, and genres.
-- **Now playing** — full-screen player with album-art color wash, waveform seek bar, codec / sample rate, heart favorites, and a swipe-up queue. Collapse it to a mini player above the tab bar.
-- **Playback** — Media3 ExoPlayer, gapless-friendly original streams by default, optional 320 / 192 / 128 kbps transcode, lock-screen and notification controls.
+- **Now playing** — full-screen player with album-art color wash, waveform seek bar, codec / sample rate, heart favorites, synced lyrics, and a swipe-up queue. Tap the cover or the lyrics icon. Collapse it to a mini player above the tab bar.
+- **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, 10-band EQ with AutoEq-style headphone presets, pause on headphone/Bluetooth disconnect, lock-screen and notification controls.
 
 Colors on the player and throughout the app are sampled from the current cover (dark and light). The seek bar uses that highlight color.
 

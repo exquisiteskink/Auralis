@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import app.auralis.music.data.remote.Song
+import app.auralis.music.data.remote.SongLyrics
 import app.auralis.music.data.remote.SubsonicClient
 import coil.imageLoader
 import coil.request.ImageRequest
@@ -43,6 +44,7 @@ data class PlayerUiState(
     val favoriteEpoch: Int = 0,
     val upcomingIndices: List<Int>? = null,
     val playbackError: String? = null,
+    val lyrics: SongLyrics? = null,
 ) {
     val current: Song? get() = queue.getOrNull(index)
     val upNextIndices: List<Int> get() = upcomingIndices ?: ((index + 1) until queue.size).toList()
@@ -326,6 +328,9 @@ class PlayerController(
             if (song != null) {
                 scope.launch { client.scrobble(song.id, submission = false) }
                 refreshArtwork(song)
+                refreshLyrics(song)
+            } else {
+                _state.update { it.copy(lyrics = null) }
             }
         }
 
@@ -391,6 +396,14 @@ class PlayerController(
         }
     }
 
+    private fun refreshLyrics(song: Song) {
+        _state.update { it.copy(lyrics = null) }
+        scope.launch {
+            val lyrics = runCatching { client.lyricsForSong(song) }.getOrNull()
+            if (_state.value.current?.id == song.id) _state.update { it.copy(lyrics = lyrics) }
+        }
+    }
+
     private fun refreshArtwork(song: Song) {
         artworkJob?.cancel()
         resetPalette()
@@ -421,6 +434,11 @@ class PlayerController(
         val extras = android.os.Bundle().apply {
             putString("app_name", "Auralis")
             putString("com.android.music.musicsource", "Auralis")
+            replayGain?.trackGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_TRACK, it) }
+            replayGain?.albumGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_ALBUM, it) }
+            replayGain?.trackPeak?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_TRACK_PEAK, it) }
+            replayGain?.albumPeak?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_ALBUM_PEAK, it) }
+            replayGain?.fallbackGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_FALLBACK, it) }
         }
         return MediaItem.Builder()
             .setMediaId(id)

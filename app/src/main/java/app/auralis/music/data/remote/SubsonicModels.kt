@@ -29,6 +29,8 @@ data class SubsonicEnvelope(
     val genres: GenresWrap? = null,
     val songsByGenre: SongsWrap? = null,
     val starred2: Starred2? = null,
+    val lyricsList: LyricsList? = null,
+    val lyrics: PlainLyrics? = null,
     @Serializable(with = OpenSubsonicExtensionListSerializer::class)
     val openSubsonicExtensions: List<OpenSubsonicExtension> = emptyList(),
 )
@@ -248,6 +250,7 @@ data class Song(
     val discNumber: Int = 0,
     val playCount: Int = 0,
     val starred: String? = null,
+    val replayGain: ReplayGain? = null,
 ) {
     val isFavorite: Boolean get() = !starred.isNullOrBlank()
 
@@ -280,6 +283,79 @@ object SimilarArtistListSerializer : FlexListSerializer<SimilarArtist>(SimilarAr
 object OpenSubsonicExtensionListSerializer :
     FlexListSerializer<OpenSubsonicExtension>(OpenSubsonicExtension.serializer())
 object GenreListSerializer : FlexListSerializer<Genre>(Genre.serializer())
+object StructuredLyricsListSerializer : FlexListSerializer<StructuredLyrics>(StructuredLyrics.serializer())
+object LyricLineListSerializer : FlexListSerializer<LyricLine>(LyricLine.serializer())
+
+@Serializable
+data class ReplayGain(
+    val trackGain: Float = Float.NaN,
+    val albumGain: Float = Float.NaN,
+    val trackPeak: Float = Float.NaN,
+    val albumPeak: Float = Float.NaN,
+    val baseGain: Float = Float.NaN,
+    val fallbackGain: Float = Float.NaN,
+)
+
+@Serializable
+data class LyricsList(
+    @Serializable(with = StructuredLyricsListSerializer::class)
+    val structuredLyrics: List<StructuredLyrics> = emptyList(),
+)
+
+@Serializable
+data class StructuredLyrics(
+    val displayArtist: String? = null,
+    val displayTitle: String? = null,
+    val lang: String? = null,
+    val offset: Int = 0,
+    val synced: Boolean = false,
+    @Serializable(with = LyricLineListSerializer::class)
+    val line: List<LyricLine> = emptyList(),
+)
+
+@Serializable
+data class LyricLine(
+    val start: Long = 0,
+    val value: String = "",
+)
+
+@Serializable
+data class PlainLyrics(
+    val artist: String? = null,
+    val title: String? = null,
+    val value: String? = null,
+)
+
+data class SongLyrics(
+    val synced: Boolean,
+    val offsetMs: Int,
+    val lines: List<LyricLine>,
+)
+
+fun parseLrcOrPlain(raw: String?): SongLyrics? {
+    val text = raw?.trim().orEmpty()
+    if (text.isBlank()) return null
+    val lrc = Regex("""\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]\s*(.*)""")
+    val lines = mutableListOf<LyricLine>()
+    for (line in text.lineSequence()) {
+        val m = lrc.find(line.trim()) ?: continue
+        val min = m.groupValues[1].toLong()
+        val sec = m.groupValues[2].toLong()
+        val frac = m.groupValues[3]
+        val ms = when {
+            frac.isEmpty() -> 0L
+            frac.length == 1 -> frac.toLong() * 100L
+            frac.length == 2 -> frac.toLong() * 10L
+            else -> frac.take(3).toLong()
+        }
+        val value = m.groupValues[4].trim()
+        if (value.isNotEmpty()) lines += LyricLine(start = min * 60_000 + sec * 1000 + ms, value = value)
+    }
+    if (lines.isNotEmpty()) return SongLyrics(synced = true, offsetMs = 0, lines = lines.sortedBy { it.start })
+    val plain = text.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("[") }
+    if (plain.isEmpty()) return null
+    return SongLyrics(synced = false, offsetMs = 0, lines = plain.map { LyricLine(value = it) })
+}
 
 fun formatDuration(seconds: Int): String {
     if (seconds <= 0) return "0:00"

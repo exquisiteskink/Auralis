@@ -3,27 +3,41 @@ package app.auralis.music.ui.settings
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.auralis.music.BuildConfig
+import app.auralis.music.data.player.EqPresets
+import app.auralis.music.data.player.PlayerSettings
+import app.auralis.music.data.player.ReplayGainMode
 import app.auralis.music.ui.components.GlassSurface
 import app.auralis.music.ui.theme.LocalContainer
 import app.auralis.music.ui.theme.LocalPalette
@@ -39,9 +53,21 @@ fun SettingsScreen(
 ) {
     val p = LocalPalette.current
     val container = LocalContainer.current
+    val context = LocalContext.current
+    val playerPrefs = remember { PlayerSettings(context) }
     val creds = container.credentials.load()
     val server = creds?.serverUrl.orEmpty()
     val user = if (creds?.authMode?.name == "ApiKey") "API key" else creds?.username.orEmpty()
+
+    var rgMode by remember { mutableStateOf(playerPrefs.replayGainMode) }
+    var peak by remember { mutableStateOf(playerPrefs.peakLimiter) }
+    var gapless by remember { mutableStateOf(playerPrefs.gapless) }
+    var crossfade by remember { mutableStateOf(playerPrefs.crossfade) }
+    var fadeMs by remember { mutableStateOf(playerPrefs.crossfadeMs.toFloat()) }
+    var pauseDisc by remember { mutableStateOf(playerPrefs.pauseOnDisconnect) }
+    var eqOn by remember { mutableStateOf(playerPrefs.eqEnabled) }
+    var eqPreset by remember { mutableStateOf(playerPrefs.eqPreset) }
+    var eqGains by remember { mutableStateOf(playerPrefs.eqGains.copyOf()) }
 
     Column(
         Modifier
@@ -59,20 +85,18 @@ fun SettingsScreen(
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(20.dp))
-        GlassSurface(Modifier.fillMaxWidth()) {
-            Text("Server", color = p.onBackground.copy(alpha = 0.5f), fontSize = 12.sp)
-            Spacer(Modifier.height(4.dp))
+
+        SettingsGroup("Account") {
             Text(server, color = p.onBackground, fontWeight = FontWeight.Medium)
             if (user.isNotBlank()) {
                 Text(user, color = p.onBackground.copy(alpha = 0.6f), fontSize = 13.sp)
             }
             Text(
-                "Login uses salted token auth (or an API key). The password is encrypted in Android Keystore and is never shown again.",
+                "Login uses salted token auth (or an API key). The password is encrypted in Android Keystore.",
                 color = p.onBackground.copy(alpha = 0.45f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            Spacer(Modifier.height(8.dp))
             TextButton(onClick = {
                 container.signOut()
                 onLoggedOut()
@@ -80,67 +104,156 @@ fun SettingsScreen(
                 Text("Sign out", color = p.onBackground)
             }
         }
-        Spacer(Modifier.height(16.dp))
-        GlassSurface(Modifier.fillMaxWidth()) {
-            Text("Appearance", color = p.onBackground, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Spacer(Modifier.height(8.dp))
+
+        SettingsGroup("Appearance") {
             ThemeMode.entries.forEach { mode ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .selectable(selected = themeMode == mode, onClick = { onThemeMode(mode) })
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = themeMode == mode,
-                        onClick = { onThemeMode(mode) },
-                        colors = RadioButtonDefaults.colors(selectedColor = p.primary),
-                    )
-                    Text(
-                        when (mode) {
-                            ThemeMode.System -> "Match system"
-                            ThemeMode.Dark -> "Dark"
-                            ThemeMode.Light -> "Light"
-                        },
-                        color = p.onBackground,
-                    )
-                }
+                RadioRow(
+                    selected = themeMode == mode,
+                    label = when (mode) {
+                        ThemeMode.System -> "Match system"
+                        ThemeMode.Dark -> "Dark"
+                        ThemeMode.Light -> "Light"
+                    },
+                    onClick = { onThemeMode(mode) },
+                )
             }
-            Text(
-                "While music plays, backgrounds wash with colors sampled from the album art.",
-                color = p.onBackground.copy(alpha = 0.45f),
-                fontSize = 12.sp,
-            )
+            Hint("While music plays, backgrounds and the seek bar follow colors from the album art.")
         }
-        Spacer(Modifier.height(16.dp))
-        GlassSurface(Modifier.fillMaxWidth()) {
-            Text("Playback quality", color = p.onBackground, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-            Spacer(Modifier.height(8.dp))
+
+        SettingsGroup("Playback") {
+            Text("Streaming quality", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
             listOf(0 to "Original (audiophile)", 320 to "320 kbps", 192 to "192 kbps", 128 to "128 kbps").forEach { (rate, label) ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onTranscode(rate) }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(
-                        selected = transcode == rate,
-                        onClick = { onTranscode(rate) },
-                        colors = RadioButtonDefaults.colors(selectedColor = p.primary),
-                    )
-                    Text(label, color = p.onBackground)
-                }
+                RadioRow(selected = transcode == rate, label = label, onClick = { onTranscode(rate) })
             }
-            Text(
-                "Original streams the file as stored on the server (FLAC, high-rate PCM, etc.) with no transcode.",
-                color = p.onBackground.copy(alpha = 0.45f),
-                fontSize = 12.sp,
+            Hint("Original streams the file as stored on the server.")
+
+            Spacer(Modifier.height(12.dp))
+            Text("ReplayGain / R128", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
+            ReplayGainMode.entries.forEach { mode ->
+                RadioRow(
+                    selected = rgMode == mode,
+                    label = when (mode) {
+                        ReplayGainMode.Off -> "Off"
+                        ReplayGainMode.Track -> "Track gain"
+                        ReplayGainMode.Album -> "Album gain"
+                    },
+                    onClick = {
+                        rgMode = mode
+                        playerPrefs.replayGainMode = mode
+                    },
+                )
+            }
+            ToggleRow(
+                title = "Peak limiter",
+                subtitle = "Lower gain so tagged peaks do not clip",
+                checked = peak,
+                onChecked = { peak = it; playerPrefs.peakLimiter = it },
+            )
+
+            Spacer(Modifier.height(8.dp))
+            ToggleRow(
+                title = "True gapless",
+                subtitle = "Join tracks without a pause using decoder delay/padding",
+                checked = gapless,
+                onChecked = {
+                    gapless = it
+                    playerPrefs.gapless = it
+                    if (!it) {
+                        crossfade = false
+                    }
+                },
+            )
+            ToggleRow(
+                title = "Crossfade",
+                subtitle = if (gapless) "Overlap the end of one track with the start of the next" else "Turn on true gapless to enable crossfade",
+                checked = crossfade,
+                enabled = gapless,
+                onChecked = {
+                    if (!gapless) return@ToggleRow
+                    crossfade = it
+                    playerPrefs.crossfade = it
+                },
+            )
+            if (crossfade && gapless) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Crossfade length  ${PlayerSettings.crossfadeLabel(fadeMs.toInt())}",
+                    color = p.onBackground.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                )
+                Slider(
+                    value = fadeMs,
+                    onValueChange = { fadeMs = it },
+                    onValueChangeFinished = { playerPrefs.crossfadeMs = fadeMs.toInt() },
+                    valueRange = 1000f..12000f,
+                    steps = 10,
+                    colors = SliderDefaults.colors(thumbColor = p.primary, activeTrackColor = p.primary),
+                )
+            }
+            ToggleRow(
+                title = "Pause on disconnect",
+                subtitle = "Pause when headphones or Bluetooth audio disconnect",
+                checked = pauseDisc,
+                onChecked = { pauseDisc = it; playerPrefs.pauseOnDisconnect = it },
             )
         }
-        Spacer(Modifier.height(16.dp))
-        GlassSurface(Modifier.fillMaxWidth()) {
+
+        SettingsGroup("Equalizer") {
+            ToggleRow(
+                title = "10-band equalizer",
+                subtitle = "Software EQ in the player, independent of the system equalizer",
+                checked = eqOn,
+                onChecked = { eqOn = it; playerPrefs.eqEnabled = it },
+            )
+            if (eqOn) {
+                Spacer(Modifier.height(8.dp))
+                Text("Presets", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Hint("General curves plus AutoEq-style headphone targets.")
+                var lastGroup = ""
+                EqPresets.all.forEach { preset ->
+                    if (preset.group != lastGroup) {
+                        lastGroup = preset.group
+                        Text(
+                            preset.group.uppercase(),
+                            color = p.onBackground.copy(alpha = 0.45f),
+                            fontSize = 11.sp,
+                            letterSpacing = 1.sp,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    RadioRow(
+                        selected = eqPreset == preset.id,
+                        label = preset.name,
+                        onClick = {
+                            eqPreset = preset.id
+                            eqGains = preset.gains.copyOf()
+                            playerPrefs.eqPreset = preset.id
+                            playerPrefs.eqGains = preset.gains
+                        },
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Bands", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                EqPresets.BANDS_HZ.forEachIndexed { i, hz ->
+                    EqBandRow(
+                        hz = hz,
+                        gain = eqGains[i],
+                        onGain = { g ->
+                            val next = eqGains.copyOf()
+                            next[i] = g
+                            eqGains = next
+                            eqPreset = "custom"
+                            playerPrefs.eqPreset = "custom"
+                            playerPrefs.eqGains = next
+                        },
+                    )
+                }
+            }
+        }
+
+        SettingsGroup("About") {
             Text("Auralis", color = p.onBackground, fontWeight = FontWeight.SemiBold)
             Text(BuildConfig.VERSION_NAME, color = p.onBackground.copy(alpha = 0.5f), fontSize = 13.sp)
             Text(
@@ -150,6 +263,92 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    val p = LocalPalette.current
+    Text(
+        title.uppercase(),
+        color = p.onBackground.copy(alpha = 0.5f),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.2.sp,
+        modifier = Modifier.padding(bottom = 8.dp, start = 4.dp),
+    )
+    GlassSurface(Modifier.fillMaxWidth()) { content() }
+    Spacer(Modifier.height(18.dp))
+}
+
+@Composable
+private fun Hint(text: String) {
+    val p = LocalPalette.current
+    Text(text, color = p.onBackground.copy(alpha = 0.45f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+}
+
+@Composable
+private fun RadioRow(selected: Boolean, label: String, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.fillMaxWidth().selectable(selected = selected, onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            colors = RadioButtonDefaults.colors(selectedColor = p.primary),
+        )
+        Text(label, color = p.onBackground)
+    }
+}
+
+@Composable
+private fun ToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onChecked: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, color = p.onBackground.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 15.sp)
+            Text(subtitle, color = p.onBackground.copy(alpha = 0.45f), fontSize = 12.sp)
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onChecked,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(checkedThumbColor = p.primary, checkedTrackColor = p.primary.copy(alpha = 0.4f)),
+        )
+    }
+}
+
+@Composable
+private fun EqBandRow(hz: Int, gain: Float, onGain: (Float) -> Unit) {
+    val p = LocalPalette.current
+    val label = if (hz >= 1000) "${hz / 1000} kHz" else "$hz Hz"
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = p.onBackground.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.width(56.dp))
+        Slider(
+            value = gain,
+            onValueChange = onGain,
+            valueRange = -12f..12f,
+            modifier = Modifier.weight(1f),
+            colors = SliderDefaults.colors(thumbColor = p.primary, activeTrackColor = p.primary),
+        )
+        Text(
+            (if (gain > 0) "+" else "") + "%.1f".format(gain),
+            color = p.onBackground.copy(alpha = 0.6f),
+            fontSize = 12.sp,
+            modifier = Modifier.width(40.dp),
+            textAlign = TextAlign.End,
+        )
     }
 }
 
@@ -167,5 +366,4 @@ class AppearancePrefs(context: Context) {
     var artistGrid: Boolean
         get() = prefs.getBoolean("artist_grid", true)
         set(value) { prefs.edit().putBoolean("artist_grid", value).apply() }
-
 }

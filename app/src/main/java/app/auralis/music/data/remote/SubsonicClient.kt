@@ -180,6 +180,28 @@ class SubsonicClient(
         get("unstar", "id" to id)
     }
 
+    suspend fun lyricsForSong(song: Song): SongLyrics? {
+        val structured = runCatching { get("getLyricsBySongId", "id" to song.id).lyricsList?.structuredLyrics }
+            .getOrNull()
+            .orEmpty()
+        val best = structured.firstOrNull { it.synced && it.line.isNotEmpty() }
+            ?: structured.firstOrNull { it.line.isNotEmpty() }
+        if (best != null) {
+            return SongLyrics(
+                synced = best.synced,
+                offsetMs = best.offset,
+                lines = best.line.filter { it.value.isNotBlank() },
+            )
+        }
+        val artist = song.artist.orEmpty()
+        val title = song.title
+        if (artist.isBlank() && title.isBlank()) return null
+        val plain = runCatching {
+            get("getLyrics", "artist" to artist, "title" to title).lyrics?.value
+        }.getOrNull()
+        return parseLrcOrPlain(plain)
+    }
+
     fun coverUrl(coverId: String?, size: Int = 600): String? {
         if (coverId.isNullOrBlank()) return null
         val creds = credentials ?: return null
