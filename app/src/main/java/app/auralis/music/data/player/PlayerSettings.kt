@@ -47,7 +47,7 @@ class PlayerSettings(context: Context) {
     var eqPreset: String
         get() {
             val id = prefs.getString(EQ_PRESET, EqPresets.FLAT.id) ?: EqPresets.FLAT.id
-            if (id == "custom" || EqPresets.all.any { it.id == id }) return id
+            if (id == "custom" || id.startsWith("autoeq:") || EqPresets.all.any { it.id == id }) return id
             return "custom"
         }
         set(value) { prefs.edit().putString(EQ_PRESET, value).apply() }
@@ -62,6 +62,35 @@ class PlayerSettings(context: Context) {
         set(value) {
             prefs.edit().putString(EQ_GAINS, value.joinToString(",") { "%.1f".format(it) }).apply()
         }
+
+    /**
+     * Selected AutoEq headphone id from `assets/autoeq/presets.json.gz`, or empty when none.
+     * Distinct from sleep/offline keys — do not reuse those prefs.
+     */
+    var autoeqPresetId: String
+        get() = prefs.getString(AUTOEQ_PRESET_ID, "").orEmpty()
+        set(value) { prefs.edit().putString(AUTOEQ_PRESET_ID, value).apply() }
+
+    /** Apply an AutoEq curve via the session EqController path (prefs → PlaybackService). */
+    fun applyAutoEq(id: String, gains: FloatArray) {
+        require(gains.size == 10)
+        prefs.edit()
+            .putBoolean(EQ_ON, true)
+            .putString(EQ_GAINS, gains.joinToString(",") { "%.1f".format(it) })
+            .putString(EQ_PRESET, "autoeq:$id")
+            .putString(AUTOEQ_PRESET_ID, id)
+            .apply()
+    }
+
+    /** Clear AutoEq selection and reset bands to Flat (EQ stays enabled). */
+    fun clearAutoEqToFlat() {
+        prefs.edit()
+            .putString(EQ_GAINS, EqPresets.FLAT.gains.joinToString(",") { "%.1f".format(it) })
+            .putString(EQ_PRESET, EqPresets.FLAT.id)
+            .putString(AUTOEQ_PRESET_ID, "")
+            .putBoolean(EQ_ON, true)
+            .apply()
+    }
 
     fun register(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -82,6 +111,8 @@ class PlayerSettings(context: Context) {
         const val EQ_ON = "eq_on"
         const val EQ_PRESET = "eq_preset"
         const val EQ_GAINS = "eq_gains"
+        /** AutoEq headphone preset id — avoid collision with sleep_/offline_ keys. */
+        const val AUTOEQ_PRESET_ID = "autoeq_preset_id"
         const val EXTRA_RG_TRACK = "auralis.rg.track"
         const val EXTRA_RG_ALBUM = "auralis.rg.album"
         const val EXTRA_RG_TRACK_PEAK = "auralis.rg.trackPeak"
