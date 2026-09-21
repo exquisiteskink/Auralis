@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.5 — 2026-09-20
+
+### Added
+- Genre chips and recently played artists on Search when the query is blank and the search field is unfocused (#2).
+- Album year and record label when supplied by the server (#3).
+
+### Changed
+- Enlarged Now Playing artwork, moved the close button to the top, and placed seek and playback controls lower on the screen (#6).
+
 ## 1.1.4 — 2026-09-19
 
 ### Changed
