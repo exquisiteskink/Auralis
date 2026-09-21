@@ -15,11 +15,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feature/autoeq-presets
-      - name: Apply AutoEq SettingsScreen patch
+      - name: Decode and apply SettingsScreen patch
         run: |
-          patch -p1 < staging/settings-autoeq/SettingsScreen.autoeq.patch
+          set -euo pipefail
+          cat staging/settings-autoeq/pb0.txt staging/settings-autoeq/pb1.txt staging/settings-autoeq/pb2.txt staging/settings-autoeq/pb3.txt | base64 -d > /tmp/SettingsScreen.autoeq.patch
+          md5sum /tmp/SettingsScreen.autoeq.patch
+          test "$(md5sum /tmp/SettingsScreen.autoeq.patch | awk '{print $1}')" = "044b5c1ce33795982f7a19ba745c5e83"
+          patch -p1 --forward < /tmp/SettingsScreen.autoeq.patch
+          test "$(md5sum app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt | awk '{print $1}')" = "17ddc88e0010d83da325765cc84edda4"
           grep -q AutoEqCatalog app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt
-          grep -q autoeqPresetId app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
