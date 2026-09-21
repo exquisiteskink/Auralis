@@ -40,6 +40,42 @@ class PlayerSettings(context: Context) {
         get() = prefs.getBoolean(PAUSE_DISC, true)
         set(value) { prefs.edit().putBoolean(PAUSE_DISC, value).apply() }
 
+    /**
+     * Sleep timer selection written by Settings / cleared by PlaybackService.
+     * `0` = off, `-1` = end of current track, otherwise minutes (`15`/`30`/`45`/`60`).
+     */
+    var sleepTimerMinutes: Int
+        get() = prefs.getInt(SLEEP_MINUTES, 0)
+        set(value) { prefs.edit().putInt(SLEEP_MINUTES, value).apply() }
+
+    /** `SystemClock.elapsedRealtime()` deadline for minute-based timers; `0` if inactive or end-of-track. */
+    var sleepDeadlineElapsed: Long
+        get() = prefs.getLong(SLEEP_DEADLINE, 0L)
+        set(value) { prefs.edit().putLong(SLEEP_DEADLINE, value).apply() }
+
+    fun clearSleepTimer() {
+        prefs.edit()
+            .putInt(SLEEP_MINUTES, 0)
+            .putLong(SLEEP_DEADLINE, 0L)
+            .apply()
+    }
+
+    fun armSleepMinutes(minutes: Int) {
+        require(minutes in SLEEP_MINUTE_OPTIONS)
+        val deadline = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
+        prefs.edit()
+            .putInt(SLEEP_MINUTES, minutes)
+            .putLong(SLEEP_DEADLINE, deadline)
+            .apply()
+    }
+
+    fun armSleepEndOfTrack() {
+        prefs.edit()
+            .putInt(SLEEP_MINUTES, SLEEP_END_OF_TRACK)
+            .putLong(SLEEP_DEADLINE, 0L)
+            .apply()
+    }
+
     var eqEnabled: Boolean
         get() = prefs.getBoolean(EQ_ON, false)
         set(value) { prefs.edit().putBoolean(EQ_ON, value).apply() }
@@ -79,6 +115,10 @@ class PlayerSettings(context: Context) {
         const val CROSSFADE = "crossfade"
         const val CROSSFADE_MS = "crossfade_ms"
         const val PAUSE_DISC = "pause_disconnect"
+        const val SLEEP_MINUTES = "sleep_minutes"
+        const val SLEEP_DEADLINE = "sleep_deadline"
+        const val SLEEP_END_OF_TRACK = -1
+        val SLEEP_MINUTE_OPTIONS = setOf(15, 30, 45, 60)
         const val EQ_ON = "eq_on"
         const val EQ_PRESET = "eq_preset"
         const val EQ_GAINS = "eq_gains"
