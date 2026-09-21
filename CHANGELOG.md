@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Sleep timer in Settings → Playback (15 / 30 / 45 / 60 minutes or end of track). Seek, a new queue, or resume after pause clears it.
+
 ## 1.1.4 — 2026-09-19
 
 ### Changed
