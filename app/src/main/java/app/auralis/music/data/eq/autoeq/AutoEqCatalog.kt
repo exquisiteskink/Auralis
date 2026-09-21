@@ -1,14 +1,12 @@
 package app.auralis.music.data.eq.autoeq
 
 import android.content.Context
+import android.util.Base64
+import java.io.ByteArrayInputStream
 import java.util.zip.GZIPInputStream
 import kotlinx.serialization.json.Json
 
-/**
- * Loads `assets/autoeq/presets.json.gz` once and offers case-insensitive
- * substring search on name / brand. Apply paths stay in PlayerSettings →
- * EqController (audio session); this class never touches ExoPlayer processors.
- */
+/** Loads AutoEq presets from ASCII base64 parts under assets/autoeq/b64/ (MCP binary workaround). */
 class AutoEqCatalog private constructor(
     val presets: List<AutoEqPreset>,
     val generatedAt: String? = null,
@@ -32,8 +30,7 @@ class AutoEqCatalog private constructor(
     fun byId(id: String): AutoEqPreset? = presets.firstOrNull { it.id == id }
 
     companion object {
-        const val ASSET_PATH = "autoeq/presets.json.gz"
-
+        private const val PART_COUNT = 23
         private val json = Json {
             ignoreUnknownKeys = true
             isLenient = true
@@ -50,9 +47,7 @@ class AutoEqCatalog private constructor(
         }
 
         fun load(context: Context): AutoEqCatalog {
-            val text = context.assets.open(ASSET_PATH).use { raw ->
-                GZIPInputStream(raw).bufferedReader(Charsets.UTF_8).use { it.readText() }
-            }
+            val text = openPresetsJson(context)
             val bundle = json.decodeFromString(AutoEqBundle.serializer(), text)
             val mapped = bundle.presets.mapNotNull { row ->
                 if (row.gains.size != 10) return@mapNotNull null
@@ -72,7 +67,18 @@ class AutoEqCatalog private constructor(
             )
         }
 
-        /** Test / preview helper — clears process-wide cache. */
+        private fun openPresetsJson(context: Context): String {
+            val am = context.assets
+            val b64 = buildString {
+                for (i in 0 until PART_COUNT) {
+                    val name = "autoeq/b64/part%02d.txt".format(i)
+                    append(am.open(name).bufferedReader(Charsets.US_ASCII).use { it.readText() })
+                }
+            }
+            val rawGzip = Base64.decode(b64, Base64.DEFAULT)
+            return GZIPInputStream(ByteArrayInputStream(rawGzip)).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }
+
         fun clearCache() {
             synchronized(this) { cached = null }
         }
