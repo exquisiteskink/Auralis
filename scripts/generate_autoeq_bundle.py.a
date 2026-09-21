@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Generate Auralis AutoEq preset bundle from a local AutoEq checkout.
+
+Reads every `*FixedBandEQ.txt` under results/, maps gains onto Auralis's
+10-band centers (31…16000 Hz), and emits gzip JSON — no hand-picked allowlist.
+
+Usage:
+  git clone --depth 1 https://github.com/jaakkopasanen/AutoEq.git /tmp/AutoEq
+  python3 generate_autoeq_bundle.py \\
+      --autoeq-root /tmp/AutoEq \\
+      --out ../../samples/presets.json.gz \\
+      --mode dedupe
+
+Modes:
+  full   — one record per FixedBandEQ path (~INDEX size)
+  dedupe — one record per model name; prefer --priority sources (default)
+
+Also writes sibling NOTICE (MIT stub) and MANIFEST.json next to --out when
+--with-sidecar is set.
+"""
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Must match app.auralis.music.data.player.EqPresets.BANDS_HZ
+BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+GAIN_RE = re.compile(
+    r"Filter\s+(\d+):\s+ON\s+PK\s+Fc\s+(\d+(?:\.\d+)?)\s+Hz\s+Gain\s+(-?\d+(?:\.\d+)?)\s+dB",
+    re.I,
+)
+PREAMP_RE = re.compile(r"Preamp:\s*(-?\d+(?:\.\d+)?)\s*dB", re.I)
+
+DEFAULT_PRIORITY = [
+    "oratory1990",
+    "crinacle",
+    "Rtings",
+    "HypetheSonics",
+    "Super Review",
+    "Innerfidelity",
+    "Kuulokenurkka",
+    "Headphone.com Legacy",
+]
+
+MIT_NOTICE = """AutoEq headphone equalization data
+====================================
+Derived from https://github.com/jaakkopasanen/AutoEq
+
+MIT License
+
+Copyright (c) 2018-2022 Jaakko Pasanen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Measurement data inside AutoEq originates from community contributors
+(oratory1990, Crinacle, Rtings, and others). Auralis redistributes derived
+10-band FixedBandEQ gains only.
+"""
+
+
+def parse_fixed_band(text: str) -> tuple[float | None, list[float] | None]:
+    pre = PREAMP_RE.search(text)
+    preamp = float(pre.group(1)) if pre else None
+    by_fc: dict[float, float] = {}
+    for m in GAIN_RE.finditer(text):
+        by_fc[float(m.group(2))] = float(m.group(3))
+    if not by_fc:
+        return preamp, None
+    gains: list[float] = []
+    for fc in BANDS:
+        if fc in by_fc:
+            gains.append(by_fc[fc])
+            continue
+        # tolerate 31.25 vs 31, etc.
+        near = min(by_fc.keys(), key=lambda k: abs(k - fc))
+        if abs(near - fc) > max(fc * 0.15, 2.0):
+            return preamp, None
+        gains.append(by_fc[near])
+    return preamp, gains
+
+
+def brand_of(name: str) -> str:
+    # Keep common multi-word brands intact when obvious
+    for prefix in (
+        "Audio-Technica",
+        "1MORE",
+        "7Hz",
+        "64 Audio",
+        "Campfire Audio",
+        "Final Audio",
+        "Moondrop",
+        "ThieAudio",
+        "Soft Ears",
+        "HiFiMan",
+        "HIFIMAN",
+        "Sony",
+        "Sennheiser",
+        "Beyerdynamic",
+        "AKG",
+        "Shure",
+        "Bose",
+        "Apple",
+        "Samsung",
+        "Google",
+        "Anker",
+        "Audeze",
+        "FiiO",
+        "iBasso",
+        "KZ",
+        "TRUTHEAR",
+        
