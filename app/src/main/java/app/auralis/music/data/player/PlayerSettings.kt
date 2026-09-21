@@ -40,6 +40,11 @@ class PlayerSettings(context: Context) {
         get() = prefs.getBoolean(PAUSE_DISC, true)
         set(value) { prefs.edit().putBoolean(PAUSE_DISC, value).apply() }
 
+    /** When true, OpenSubsonic original/`download` offline fetches require unmetered Wi‑Fi. */
+    var wifiOnlyHiResDownloads: Boolean
+        get() = prefs.getBoolean(WIFI_ONLY_HIRES_DL, true)
+        set(value) { prefs.edit().putBoolean(WIFI_ONLY_HIRES_DL, value).apply() }
+
     var eqEnabled: Boolean
         get() = prefs.getBoolean(EQ_ON, false)
         set(value) { prefs.edit().putBoolean(EQ_ON, value).apply() }
@@ -79,6 +84,7 @@ class PlayerSettings(context: Context) {
         const val CROSSFADE = "crossfade"
         const val CROSSFADE_MS = "crossfade_ms"
         const val PAUSE_DISC = "pause_disconnect"
+        const val WIFI_ONLY_HIRES_DL = "wifi_only_hires_dl"
         const val EQ_ON = "eq_on"
         const val EQ_PRESET = "eq_preset"
         const val EQ_GAINS = "eq_gains"
