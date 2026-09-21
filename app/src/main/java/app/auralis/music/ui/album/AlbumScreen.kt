@@ -93,11 +93,16 @@ fun AlbumScreen(
     val discSections = albumDiscSections(current.song)
     val songs = discSections.flatMap(DiscSection::songs)
     val showDiscHeaders = discSections.size > 1 || discSections.any { it.number > 1 }
-    val stats = buildString {
-        append("${songs.size} tracks")
-        if (discSections.size > 1) append("  –  ${discSections.size} discs")
-        if (current.duration > 0) append("  –  ${formatDuration(current.duration)}")
-    }
+    val labelName = current.recordLabels
+        .map { it.name.trim() }
+        .firstOrNull { it.isNotEmpty() }
+    val stats = listOfNotNull(
+        current.year.takeIf { it > 0 }?.toString(),
+        labelName,
+        "${songs.size} tracks",
+        "${discSections.size} discs".takeIf { discSections.size > 1 },
+        formatDuration(current.duration).takeIf { current.duration > 0 },
+    ).joinToString(" · ")
 
     LazyColumn(
         Modifier
