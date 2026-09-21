@@ -330,14 +330,15 @@ internal fun ControlsDeck(ui: PlayerUiState) {
                 Icons.Rounded.Shuffle,
                 "Shuffle",
                 tint = if (ui.shuffle) p.onBackground else p.onBackground.copy(alpha = 0.32f),
+                modifier = Modifier.size(28.dp),
             )
         }
         IconButton(onClick = { player.previous() }) {
-            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = p.onBackground, modifier = Modifier.size(36.dp))
+            Icon(Icons.Rounded.SkipPrevious, "Previous", tint = p.onBackground, modifier = Modifier.size(42.dp))
         }
         Box(
             Modifier
-                .size(72.dp)
+                .size(82.dp)
                 .shadow(8.dp, CircleShape)
                 .clip(CircleShape)
                 .background(p.playButton)
@@ -348,17 +349,18 @@ internal fun ControlsDeck(ui: PlayerUiState) {
                 if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                 if (ui.isPlaying) "Pause" else "Play",
                 tint = p.onPlayButton,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(40.dp),
             )
         }
         IconButton(onClick = { player.next() }) {
-            Icon(Icons.Rounded.SkipNext, "Next", tint = p.onBackground, modifier = Modifier.size(36.dp))
+            Icon(Icons.Rounded.SkipNext, "Next", tint = p.onBackground, modifier = Modifier.size(42.dp))
         }
         IconButton(onClick = { player.toggleRepeat() }) {
             Icon(
                 if (ui.repeatMode == Player.REPEAT_MODE_ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
                 "Repeat",
                 tint = if (ui.repeatMode != Player.REPEAT_MODE_OFF) p.onBackground else p.onBackground.copy(alpha = 0.32f),
+                modifier = Modifier.size(28.dp),
             )
         }
     }

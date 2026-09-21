@@ -283,7 +283,7 @@ private fun NowPlayingPage(
             .navigationBarsPadding()
             .padding(horizontal = 24.dp),
     ) {
-        // Plexamp-like: larger art near top; seek + transport lower.
+        // Plexamp-like: large art → seek → details/meta → controls (tight).
         val artSize = minOf(maxWidth * 0.90f, maxHeight * 0.42f)
         Column(
             Modifier.fillMaxSize(),
@@ -317,7 +317,37 @@ private fun NowPlayingPage(
                 )
             }
 
+            // Breathing room under art, then seek — Plexamp-like stack.
             Spacer(Modifier.height(20.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    formatDurationMs(positionMs),
+                    color = p.onBackground.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(40.dp),
+                )
+                WaveformSeekBar(
+                    positionMs = positionMs,
+                    durationMs = ui.durationMs,
+                    seed = song.id,
+                    onSeek = { ms -> player.seek(ms) },
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                Text(
+                    formatDurationMs(ui.durationMs),
+                    color = p.onBackground.copy(alpha = 0.85f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(40.dp),
+                    maxLines = 1,
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
             Text(
                 song.artist.orEmpty(),
                 color = p.onBackground.copy(alpha = 0.92f),
@@ -349,7 +379,7 @@ private fun NowPlayingPage(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             MetaRow(
                 codec = song.codecLabel,
                 sampleRate = song.sampleRateLabel,
@@ -359,41 +389,13 @@ private fun NowPlayingPage(
                 onToggleLyrics = { showLyrics = !showLyrics },
             )
 
-            Spacer(Modifier.weight(1f))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    formatDurationMs(positionMs),
-                    color = p.onBackground.copy(alpha = 0.85f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.width(40.dp),
-                )
-                WaveformSeekBar(
-                    positionMs = positionMs,
-                    durationMs = ui.durationMs,
-                    seed = song.id,
-                    onSeek = { ms -> player.seek(ms) },
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                )
-                Text(
-                    formatDurationMs(ui.durationMs),
-                    color = p.onBackground.copy(alpha = 0.85f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.width(40.dp),
-                    maxLines = 1,
-                )
-            }
-
-            Spacer(Modifier.height(18.dp))
+            // Tight gap: MetaRow → ControlsDeck (no weight gap).
+            Spacer(Modifier.height(10.dp))
             ControlsDeck(ui)
             Spacer(Modifier.height(6.dp))
             Box(Modifier.fillMaxWidth().height(10.dp).clickable(onClick = onOpenQueue))
-            Spacer(Modifier.height(8.dp))
+            // Remaining flex only after controls so seek/details stay under art.
+            Spacer(Modifier.weight(1f))
         }
     }
 }
