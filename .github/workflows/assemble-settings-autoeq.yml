@@ -1,11 +1,11 @@
 name: assemble-settings-autoeq
 on:
+  workflow_dispatch:
   push:
     branches: [feature/autoeq-presets]
     paths:
       - 'staging/settings-autoeq/**'
       - '.github/workflows/assemble-settings-autoeq.yml'
-  workflow_dispatch:
 jobs:
   assemble:
     runs-on: ubuntu-latest
@@ -15,17 +15,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feature/autoeq-presets
-      - name: Concatenate SettingsScreen chunks
+      - name: Apply AutoEq SettingsScreen patch
         run: |
-          python3 <<'PY'
-          from pathlib import Path
-          parts = sorted(Path('staging/settings-autoeq').glob('s*.txt'), key=lambda p: int(p.stem[1:]))
-          text = ''.join(p.read_text(encoding='utf-8') for p in parts)
-          assert 'AutoEqCatalog' in text and 'autoeqPresetId' in text
-          path = Path('app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt')
-          path.write_text(text, encoding='utf-8')
-          print('wrote', path, 'len', len(text))
-          PY
+          patch -p1 < staging/settings-autoeq/SettingsScreen.autoeq.patch
+          grep -q AutoEqCatalog app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt
+          grep -q autoeqPresetId app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
