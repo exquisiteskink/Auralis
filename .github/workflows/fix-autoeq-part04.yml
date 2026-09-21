@@ -1,0 +1,44 @@
+name: fix-autoeq-part04
+on:
+  push:
+    branches: [feature/autoeq-presets]
+    paths:
+      - '.github/workflows/fix-autoeq-part04.yml'
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/autoeq-presets
+      - name: Fix part04 single-char corruption
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/assets/autoeq/b64/part04.txt')
+          c = p.read_text(encoding='ascii')
+          old, new = 'OYdiRQ5uQsdNG', 'OYdiRQ6uQsdNG'
+          n = c.count(old)
+          print('matches', n, 'len', len(c), 'at6610', repr(c[6610]))
+          if n == 1:
+              p.write_text(c.replace(old, new, 1), encoding='ascii')
+              print('fixed')
+          elif c[6610] == '6':
+              print('already fixed')
+          else:
+              raise SystemExit(f'unexpected state n={n} ch={c[6610]!r}')
+          PY
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/autoeq/b64/part04.txt
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "AutoEq: fix b64 part04 single-char corruption"
+            git push origin HEAD:feature/autoeq-presets
+          fi
