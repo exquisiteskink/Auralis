@@ -1,0 +1,37 @@
+name: assemble-settings-autoeq
+on:
+  push:
+    branches: [feature/autoeq-presets]
+    paths:
+      - 'staging/settings-autoeq/**'
+      - '.github/workflows/assemble-settings-autoeq.yml'
+  workflow_dispatch:
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/autoeq-presets
+      - name: Concatenate SettingsScreen chunks
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          parts = sorted(Path('staging/settings-autoeq').glob('s*.txt'), key=lambda p: int(p.stem[1:]))
+          text = ''.join(p.read_text(encoding='utf-8') for p in parts)
+          assert 'AutoEqCatalog' in text and 'autoeqPresetId' in text
+          path = Path('app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt')
+          path.write_text(text, encoding='utf-8')
+          print('wrote', path, 'len', len(text))
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/app/auralis/music/ui/settings/SettingsScreen.kt
+          if git diff --cached --quiet; then echo no changes; else
+            git commit -m "AutoEq: SettingsScreen Headphone EQ search UI"
+            git push origin HEAD:feature/autoeq-presets
+          fi
