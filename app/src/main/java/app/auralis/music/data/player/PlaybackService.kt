@@ -21,19 +21,21 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
 import app.auralis.music.AuralisApp
 import app.auralis.music.MainActivity
 import app.auralis.music.R
+import app.auralis.music.data.player.auto.AutoLibraryCallback
 import com.google.common.collect.ImmutableList
 
 @UnstableApi
-class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPreferenceChangeListener {
+class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private var player: ExoPlayer? = null
     private var fadePlayer: ExoPlayer? = null
-    private var session: MediaSession? = null
+    private var session: MediaLibraryService.MediaLibrarySession? = null
+    private var libraryCallback: AutoLibraryCallback? = null
     private val eqMain = EqController()
     private val eqFade = EqController()
     private var rgLinear = 1f
@@ -72,21 +74,10 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
             putString("com.android.music.musicsource", "Auralis")
             putString("app_name", "Auralis")
         }
-        session = MediaSession.Builder(this, exo)
-            .setCallback(object : MediaSession.Callback {
-                override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-                    val accepted = super.onConnect(session, controller)
-                    if (controller.uid == android.os.Process.myUid()) return accepted
-                    if (!controller.isTrusted) return MediaSession.ConnectionResult.reject()
-                    return MediaSession.ConnectionResult.accept(
-                        accepted.availableSessionCommands,
-                        accepted.availablePlayerCommands.buildUpon()
-                            .remove(Player.COMMAND_CHANGE_MEDIA_ITEMS)
-                            .remove(Player.COMMAND_SET_MEDIA_ITEM)
-                            .build(),
-                    )
-                }
-            })
+        val app = application as AuralisApp
+        val callback = AutoLibraryCallback(app.container, app.container.player)
+        libraryCallback = callback
+        session = MediaLibraryService.MediaLibrarySession.Builder(this, exo, callback)
             .setId("app.auralis.music.session")
             .setSessionActivity(openApp)
             .setExtras(extras)
@@ -115,7 +106,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         handler.post(tick)
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibraryService.MediaLibrarySession? = session
 
     override fun onSharedPreferenceChanged(sharedPreferences: android.content.SharedPreferences?, key: String?) {
         val exo = player ?: return
@@ -137,6 +128,8 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         handler.removeCallbacks(tick)
         cancelCrossfade()
         settings.unregister(this)
+        libraryCallback?.release()
+        libraryCallback = null
         session?.run {
             player.release()
             release()
