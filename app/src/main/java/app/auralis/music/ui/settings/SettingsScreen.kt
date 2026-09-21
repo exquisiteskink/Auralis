@@ -23,6 +23,8 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +57,8 @@ fun SettingsScreen(
     val container = LocalContainer.current
     val context = LocalContext.current
     val playerPrefs = remember { PlayerSettings(context) }
+    val downloads = container.downloads
+    val dlState by downloads.state.collectAsState()
     val creds = container.credentials.load()
     val server = creds?.serverUrl.orEmpty()
     val user = if (creds?.authMode?.name == "ApiKey") "API key" else creds?.username.orEmpty()
@@ -68,6 +72,8 @@ fun SettingsScreen(
     var eqOn by remember { mutableStateOf(playerPrefs.eqEnabled) }
     var eqPreset by remember { mutableStateOf(playerPrefs.eqPreset) }
     var eqGains by remember { mutableStateOf(playerPrefs.eqGains.copyOf()) }
+    var wifiOnlyHiRes by remember { mutableStateOf(playerPrefs.wifiOnlyHiResDownloads) }
+    LaunchedEffect(Unit) { downloads.refreshBytes() }
 
     Column(
         Modifier
@@ -198,6 +204,36 @@ fun SettingsScreen(
                 checked = pauseDisc,
                 onChecked = { pauseDisc = it; playerPrefs.pauseOnDisconnect = it },
             )
+        }
+
+
+        SettingsGroup("Offline downloads") {
+            ToggleRow(
+                title = "Wi‑Fi only for HiRes downloads",
+                subtitle = "Original OpenSubsonic download files require unmetered Wi‑Fi when enabled",
+                checked = wifiOnlyHiRes,
+                onChecked = {
+                    wifiOnlyHiRes = it
+                    playerPrefs.wifiOnlyHiResDownloads = it
+                },
+            )
+            Hint("Uses the documented download endpoint (original file). Streaming quality is separate.")
+            Spacer(Modifier.height(8.dp))
+            val usedMb = dlState.bytesUsed / (1024.0 * 1024.0)
+            Text(
+                if (dlState.bytesUsed > 0) "Stored offline  %.1f MB".format(usedMb) else "No offline files yet",
+                color = p.onBackground.copy(alpha = 0.7f),
+                fontSize = 13.sp,
+            )
+            if (dlState.phase.name != "Idle" && !dlState.message.isNullOrBlank()) {
+                Text(dlState.message ?: "", color = p.onBackground.copy(alpha = 0.5f), fontSize = 12.sp)
+            }
+            TextButton(onClick = { downloads.refreshBytes() }) {
+                Text("Refresh size", color = p.onBackground)
+            }
+            TextButton(onClick = { downloads.clearDownloads() }) {
+                Text("Clear offline downloads", color = p.onBackground)
+            }
         }
 
         SettingsGroup("Equalizer") {
