@@ -4,6 +4,9 @@ import android.content.Context
 import app.auralis.music.data.auth.CredentialStore
 import app.auralis.music.data.auth.StoredCredentials
 import app.auralis.music.data.player.PlayerController
+import app.auralis.music.data.player.PlayerSettings
+import app.auralis.music.data.download.DownloadStore
+import app.auralis.music.data.download.OfflineDownloadManager
 import app.auralis.music.data.remote.MetadataRepository
 import app.auralis.music.data.remote.SubsonicClient
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +19,10 @@ class AppContainer(context: Context) {
     val credentials = CredentialStore(context)
     val client = SubsonicClient()
     val metadata = MetadataRepository(client)
-    val player = PlayerController(context.applicationContext, client)
+    val playerSettings = PlayerSettings(context.applicationContext)
+    val downloadStore = DownloadStore(context.applicationContext)
+    val downloads = OfflineDownloadManager(context.applicationContext, client, downloadStore, playerSettings)
+    val player = PlayerController(context.applicationContext, client, downloadStore)
 
     private val _loggedIn = MutableStateFlow(false)
     val loggedIn: StateFlow<Boolean> = _loggedIn
