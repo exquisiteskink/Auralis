@@ -10,6 +10,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import app.auralis.music.data.download.DownloadStore
 import app.auralis.music.data.remote.Song
 import app.auralis.music.data.remote.SongLyrics
 import app.auralis.music.data.remote.SubsonicClient
@@ -56,6 +57,7 @@ data class PlayerUiState(
 class PlayerController(
     private val context: Context,
     private val client: SubsonicClient,
+    private val downloadStore: DownloadStore? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -431,6 +433,10 @@ class PlayerController(
 
     private fun Song.toMediaItem(): MediaItem {
         val art = client.coverUrl(coverArt, 800)
+        val localUri = downloadStore?.let { store ->
+            val creds = client.credentials ?: return@let null
+            store.playbackUri(store.serverKey(creds), id)
+        }
         val extras = android.os.Bundle().apply {
             putString("app_name", "Auralis")
             putString("com.android.music.musicsource", "Auralis")
@@ -442,7 +448,7 @@ class PlayerController(
         }
         return MediaItem.Builder()
             .setMediaId(id)
-            .setUri(client.streamUrl(id, transcodeBitrate))
+            .setUri(localUri ?: android.net.Uri.parse(client.streamUrl(id, transcodeBitrate)))
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(title)
