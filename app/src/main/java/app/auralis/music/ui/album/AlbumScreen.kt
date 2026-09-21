@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +43,8 @@ import app.auralis.music.ui.components.ErrorText
 import app.auralis.music.ui.components.HeaderPlay
 import app.auralis.music.ui.components.ScreenTopBar
 import app.auralis.music.ui.components.SongRow
+import app.auralis.music.data.download.DownloadPhase
+import app.auralis.music.ui.theme.LocalContainer
 import app.auralis.music.ui.theme.LocalClient
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
@@ -70,6 +74,8 @@ fun AlbumScreen(
 ) {
     val client = LocalClient.current
     val player = LocalPlayer.current
+    val container = LocalContainer.current
+    val dlState by container.downloads.state.collectAsState()
     val p = LocalPalette.current
     var album by remember(albumId) { mutableStateOf<AlbumWithSongs?>(null) }
     var error by remember(albumId) { mutableStateOf<String?>(null) }
@@ -129,6 +135,21 @@ fun AlbumScreen(
                     IconButton(onClick = { if (songs.isNotEmpty()) player.play(songs.shuffled(), 0) }) {
                         Icon(Icons.Rounded.Shuffle, "Shuffle", tint = p.onBackground.copy(alpha = 0.75f))
                     }
+                    IconButton(
+                        onClick = {
+                            if (songs.isNotEmpty()) {
+                                container.downloads.enqueueAlbum(albumId, songs, current.displayName)
+                            }
+                        },
+                    ) {
+                        val tint = when (dlState.phase) {
+                            DownloadPhase.Running -> p.primary
+                            DownloadPhase.Done -> p.primary.copy(alpha = 0.9f)
+                            DownloadPhase.PausedWifi, DownloadPhase.Failed -> p.onBackground.copy(alpha = 0.45f)
+                            else -> p.onBackground.copy(alpha = 0.75f)
+                        }
+                        Icon(Icons.Rounded.Download, "Download album", tint = tint)
+                    }
                 }
             }
             Text(
@@ -138,6 +159,21 @@ fun AlbumScreen(
                 textAlign = TextAlign.End,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
             )
+            if (dlState.phase == DownloadPhase.Running || !dlState.message.isNullOrBlank()) {
+                val status = when (dlState.phase) {
+                    DownloadPhase.Running -> "Downloading ${dlState.done}/${dlState.total}" +
+                        (dlState.currentTitle?.let { " · $it" } ?: "")
+                    else -> dlState.message.orEmpty()
+                }
+                if (status.isNotBlank()) {
+                    Text(
+                        status,
+                        color = p.onBackground.copy(alpha = 0.55f),
+                        fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    )
+                }
+            }
             Box(
                 Modifier
                     .fillMaxWidth()
