@@ -80,6 +80,14 @@ class SubsonicClientTest {
         assertNull(compressed.queryParameter("format"))
         client.credentials = null
         assertNull(client.coverUrl("art"))
+
+        client.credentials = StoredCredentials("https://music.example", apiKey = "a&b", authMode = AuthMode.ApiKey)
+        val dl = client.downloadUrl("song/a?b").toHttpUrl()
+        assertEquals("download", dl.pathSegments.last())
+        assertEquals("song/a?b", dl.queryParameter("id"))
+        assertEquals("a&b", dl.queryParameter("apiKey"))
+        assertNull(dl.queryParameter("format"))
+        client.credentials = null
     }
 
     @Test fun cancellingRequestStopsCallAndDoesNotPublishLogin() = runBlocking {
