@@ -9,11 +9,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
@@ -29,12 +33,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.auralis.music.BuildConfig
+import app.auralis.music.data.eq.autoeq.AutoEqCatalog
+import app.auralis.music.data.eq.autoeq.AutoEqPreset
 import app.auralis.music.data.player.EqPresets
 import app.auralis.music.data.player.PlayerSettings
 import app.auralis.music.data.player.ReplayGainMode
@@ -68,6 +76,23 @@ fun SettingsScreen(
     var eqOn by remember { mutableStateOf(playerPrefs.eqEnabled) }
     var eqPreset by remember { mutableStateOf(playerPrefs.eqPreset) }
     var eqGains by remember { mutableStateOf(playerPrefs.eqGains.copyOf()) }
+    var autoeqId by remember { mutableStateOf(playerPrefs.autoeqPresetId) }
+    var autoeqQuery by remember { mutableStateOf("") }
+
+    val catalog = remember(context) {
+        runCatching { AutoEqCatalog.get(context) }.getOrNull()
+    }
+    val autoeqMatches = remember(autoeqQuery, catalog) {
+        catalog?.search(autoeqQuery, limit = 40).orEmpty()
+    }
+    val activeAutoEqName = remember(autoeqId, catalog) {
+        if (autoeqId.isBlank()) null else catalog?.byId(autoeqId)?.name
+    }
+
+    fun clearAutoEqSelection() {
+        autoeqId = ""
+        playerPrefs.autoeqPresetId = ""
+    }
 
     Column(
         Modifier
@@ -203,7 +228,7 @@ fun SettingsScreen(
         SettingsGroup("Equalizer") {
             ToggleRow(
                 title = "10-band equalizer",
-                subtitle = "Software EQ in the player, independent of the system equalizer",
+                subtitle = "Session EQ (DynamicsProcessing / platform Equalizer), independent of the system equalizer",
                 checked = eqOn,
                 onChecked = { eqOn = it; playerPrefs.eqEnabled = it },
             )
@@ -213,11 +238,12 @@ fun SettingsScreen(
                 Hint("Genre and speaker curves. Drag a band to make a custom curve.")
                 EqPresets.all.forEach { preset ->
                     RadioRow(
-                        selected = eqPreset == preset.id,
+                        selected = eqPreset == preset.id && autoeqId.isBlank(),
                         label = preset.name,
                         onClick = {
                             eqPreset = preset.id
                             eqGains = preset.gains.copyOf()
+                            clearAutoEqSelection()
                             playerPrefs.eqPreset = preset.id
                             playerPrefs.eqGains = preset.gains
                         },
@@ -234,11 +260,86 @@ fun SettingsScreen(
                             next[i] = g
                             eqGains = next
                             eqPreset = "custom"
+                            clearAutoEqSelection()
                             playerPrefs.eqPreset = "custom"
                             playerPrefs.eqGains = next
                         },
                     )
                 }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Text("Headphone EQ (AutoEq)", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Hint(
+                if (catalog == null) {
+                    "Preset pack missing from assets. Bundle presets.json.gz under assets/autoeq/."
+                } else {
+                    "Search ${catalog.count} headphone curves. Apply writes gains into the session EQ — not the ExoPlayer sink."
+                },
+            )
+            if (activeAutoEqName != null) {
+                Text(
+                    "Active: $activeAutoEqName",
+                    color = p.primary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            OutlinedTextField(
+                value = autoeqQuery,
+                onValueChange = { autoeqQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                placeholder = { Text("Search headphones…", color = p.onBackground.copy(alpha = 0.4f)) },
+                singleLine = true,
+                enabled = catalog != null,
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = p.onBackground.copy(alpha = 0.18f),
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = p.surfaceHigh,
+                    unfocusedContainerColor = p.surfaceHigh,
+                    disabledContainerColor = p.surfaceHigh.copy(alpha = 0.5f),
+                    focusedTextColor = p.onBackground,
+                    unfocusedTextColor = p.onBackground,
+                    cursorColor = p.onBackground,
+                ),
+            )
+            if (autoeqQuery.isNotBlank() && catalog != null) {
+                Spacer(Modifier.height(6.dp))
+                if (autoeqMatches.isEmpty()) {
+                    Text("No matches", color = p.onBackground.copy(alpha = 0.45f), fontSize = 13.sp)
+                } else {
+                    Column(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+                        autoeqMatches.forEach { preset ->
+                            AutoEqRow(
+                                preset = preset,
+                                selected = preset.id == autoeqId,
+                                onClick = {
+                                    val gains = preset.gains.copyOf()
+                                    playerPrefs.applyAutoEq(preset.id, gains)
+                                    autoeqId = preset.id
+                                    eqGains = gains
+                                    eqPreset = "autoeq:${preset.id}"
+                                    eqOn = true
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            TextButton(
+                onClick = {
+                    playerPrefs.clearAutoEqToFlat()
+                    autoeqId = ""
+                    eqGains = EqPresets.FLAT.gains.copyOf()
+                    eqPreset = EqPresets.FLAT.id
+                    eqOn = true
+                    autoeqQuery = ""
+                },
+                enabled = autoeqId.isNotBlank() || eqGains.any { it != 0f },
+            ) {
+                Text("Clear → Flat", color = p.onBackground)
             }
         }
 
@@ -251,7 +352,46 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),
             )
+            Text(
+                "Headphone EQ curves from AutoEq (MIT). Measurements by community contributors.",
+                color = p.onBackground.copy(alpha = 0.5f),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
+    }
+}
+
+@Composable
+private fun AutoEqRow(preset: AutoEqPreset, selected: Boolean, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                preset.name,
+                color = if (selected) p.primary else p.onBackground,
+                fontSize = 14.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (preset.subtitle.isNotBlank()) {
+                Text(
+                    preset.subtitle,
+                    color = p.onBackground.copy(alpha = 0.45f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Text("Apply", color = p.primary, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
     }
 }
 
