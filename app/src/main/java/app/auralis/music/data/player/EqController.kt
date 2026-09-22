@@ -138,6 +138,24 @@ class EqController {
         // Keep replayGainDb so a re-attach restores the same gain.
     }
 
+    /**
+     * Steal platform effects from [other] without releasing them.
+     * Used when promoting the crossfade player so DynamicsProcessing (and RG
+     * input gain) stay attached to the already-audible audio session — releasing
+     * and re-creating the effect on a live session caused a ~1s audible pause.
+     */
+    fun adoptFrom(other: EqController) {
+        if (other === this) return
+        release()
+        dynamics = other.dynamics
+        equalizer = other.equalizer
+        sessionId = other.sessionId
+        replayGainDb = other.replayGainDb
+        other.dynamics = null
+        other.equalizer = null
+        other.sessionId = 0
+    }
+
     val audioSessionId: Int get() = sessionId
 
     private fun interpolate(freqHz: Float, gains: FloatArray): Float {

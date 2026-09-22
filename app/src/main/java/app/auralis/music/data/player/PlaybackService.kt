@@ -231,12 +231,14 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun attachEq(exo: ExoPlayer, eq: EqController) {
         val prev = eq.audioSessionId
         val sid = exo.audioSessionId
-        if (prev != 0 && prev != sid && eq === eqMain) {
-            notifyExternalEqSession(prev, open = false)
-        }
         eq.attach(sid, settings)
         if (eq === eqMain && sid != 0) {
+            // Open the new session before closing the old one so Poweramp DVC can
+            // rebind without a window where no session is advertised (loud blast).
             notifyExternalEqSession(sid, open = true)
+            if (prev != 0 && prev != sid) {
+                notifyExternalEqSession(prev, open = false)
+            }
         }
     }
 
@@ -255,7 +257,13 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         )
         val viaEffect = eq.applyReplayGainLinear(rgLinear, settings)
         if (viaEffect) {
-            setPlayerVolumeSmooth(exo, 1f)
+            // DVC path: keep AudioTrack volume at unity. Snap only when already near
+            // target so we never run a visible ramp that fights Poweramp.
+            volumeAnim?.cancel()
+            volumeAnim = null
+            if (abs(exo.volume - 1f) >= 0.01f) {
+                exo.volume = 1f
+            }
         } else {
             setPlayerVolumeSmooth(exo, replayGainToPlayerVolume(rgLinear))
         }
@@ -281,9 +289,6 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun notifyExternalEqSession(sessionId: Int, open: Boolean) {
         if (sessionId == 0) return
         if (open && sessionId == lastNotifiedSessionId) return
-        if (!open && sessionId != lastNotifiedSessionId && lastNotifiedSessionId != 0) {
-            // Already tracking a different session; still close the requested one.
-        }
         val action = if (open) {
             AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
         } else {
@@ -298,7 +303,13 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 },
             )
         }
-        lastNotifiedSessionId = if (open) sessionId else 0
+        if (open) {
+            lastNotifiedSessionId = sessionId
+        } else if (sessionId == lastNotifiedSessionId) {
+            // Only clear when closing the session we currently advertise.
+            lastNotifiedSessionId = 0
+        }
+        // Closing a stale session while another is already open: keep lastNotified.
     }
 
     private fun maybeStartCrossfade() {
@@ -349,6 +360,13 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
         val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
         val next = buildPlayer(handleAudioFocus = false)
+        // Share the primary audio session so Poweramp DVC / external EQ stay bound
+        // across promote (dual-session rebind caused ~1s loud blast on skip/crossfade).
+        // Must be set before prepare() creates the AudioTrack.
+        val sharedSession = from.audioSessionId
+        if (sharedSession != 0) {
+            next.setAudioSessionId(sharedSession)
+        }
         fadePlayer = next
         pendingNextIndex = nextIndex
         pendingReady = false
@@ -358,8 +376,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             settings.peakLimiter,
         )
         applyDisconnectPolicy(next)
-        attachEq(next, eqFade)
-        eqFade.applyReplayGainLinear(pendingNextLinear, settings)
+        if (sharedSession != 0 && next.audioSessionId == sharedSession) {
+            // eqMain already owns DynamicsProcessing + OPEN broadcast on this session.
+            // Do not attach eqFade (#17 double-attach) or open a second external session.
+            eqFade.release()
+        } else {
+            // Fallback if session share failed (session still 0).
+            attachEq(next, eqFade)
+            eqFade.applyReplayGainLinear(pendingNextLinear, settings)
+        }
         next.volume = 0f
         next.setMediaItems(items, nextIndex, 0L)
         next.addListener(object : Player.Listener {
@@ -385,13 +410,26 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         volumeAnim = null
 
         val nextLinear = pendingNextLinear
-        // Keep ReplayGain on DynamicsProcessing when available; crossfade envelopes are
-        // mix-only (0↔1). Multiplying RG into player volume again caused jumps and
-        // fought Poweramp DVC on the secondary session.
-        val nextViaEffect = eqFade.applyReplayGainLinear(nextLinear, settings)
-        eqMain.applyReplayGainLinear(rgLinear, settings)
-        val nextGain = if (nextViaEffect) 1f else replayGainToPlayerVolume(nextLinear)
-        val fromGain = from.volume.coerceIn(0.05f, 1f)
+        val sharedSession =
+            next.audioSessionId != 0 && next.audioSessionId == from.audioSessionId
+
+        val nextGain: Float
+        val fromGain: Float
+        if (sharedSession) {
+            // One DynamicsProcessing on the shared session cannot carry two different
+            // ReplayGain values. Park DP at unity and bake RG into the volume envelope
+            // for the overlap only; promote restores RG to DP and volume to 1f.
+            fromGain = replayGainToPlayerVolume(rgLinear)
+            nextGain = replayGainToPlayerVolume(nextLinear)
+            from.volume = fromGain
+            eqMain.applyReplayGainLinear(1f, settings)
+        } else {
+            // Separate-session fallback: keep RG on each player's effect; envelope is mix-only.
+            val nextViaEffect = eqFade.applyReplayGainLinear(nextLinear, settings)
+            eqMain.applyReplayGainLinear(rgLinear, settings)
+            nextGain = if (nextViaEffect) 1f else replayGainToPlayerVolume(nextLinear)
+            fromGain = from.volume.coerceIn(0.05f, 1f)
+        }
 
         from.pauseAtEndOfMediaItems = true
         // Secondary was built without audio focus — both players can be audible together.
@@ -417,25 +455,63 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextLinear: Float) {
         if (!fading || player !== from || fadePlayer !== next) return
-        player = next
-        session?.player = next
         fadePlayer = null
         pendingReady = false
         pendingNextIndex = C.INDEX_UNSET
-        from.stop()
-        from.release()
-        // Promote secondary to focus owner now that it is the sole primary player.
-        next.setAudioAttributes(mediaAudioAttributes(), /* handleAudioFocus= */ true)
         rgLinear = nextLinear
         fading = false
         fadeAnim = null
+
+        // Point internal primary at next first so outgoing listeners ignore focus loss.
+        player = next
+
+        // Take audio focus on next WHILE from still holds it. Releasing from first
+        // abandoned focus, then setAudioAttributes re-requested it and Media3 briefly
+        // suppressed playback (title already switched → owner-visible ~1s pause).
+        next.setAudioAttributes(mediaAudioAttributes(), /* handleAudioFocus= */ true)
+
+        // Shared session: eqMain already owns the live effects — do not release them.
+        // Separate-session fallback: adopt eqFade without teardown+reattach on next.
+        promoteFadeEqToMain(next)
+
+        // Session / NP title switch only after focus + EQ handoff are done.
+        session?.player = next
         applyGapless(next)
         installPlayerListeners(next)
-        // Secondary owned eqFade for this audio session; release before eqMain
-        // re-attaches or both DynamicsProcessing instances fight on one session.
-        eqFade.release()
-        attachEq(next, eqMain)
+        // Restores RG onto DynamicsProcessing and returns exo.volume to 1f for DVC.
         applyReplayGain(next, next.currentMediaItem, eqMain)
+
+        // Retire outgoing off the critical path so AudioTrack teardown cannot glitch
+        // the already-audible next track in the same frame as the promote.
+        handler.post {
+            runCatching {
+                from.stop()
+                from.release()
+            }
+        }
+    }
+
+    /**
+     * Ensure eqMain owns platform effects for [next] without CLOSING/OPENING the
+     * external EQ session when the audio session was shared (DVC-safe).
+     */
+    private fun promoteFadeEqToMain(next: ExoPlayer) {
+        val prevMainSession = eqMain.audioSessionId
+        val nextSession = next.audioSessionId
+        if (nextSession != 0 && nextSession == prevMainSession) {
+            // Shared session path: keep eqMain's DynamicsProcessing + lastNotifiedSessionId.
+            eqFade.release()
+            return
+        }
+        // Separate-session fallback: move eqFade's live effects onto eqMain (no recreate).
+        eqMain.release()
+        eqMain.adoptFrom(eqFade)
+        if (nextSession != 0) {
+            notifyExternalEqSession(nextSession, open = true)
+        }
+        if (prevMainSession != 0 && prevMainSession != nextSession) {
+            notifyExternalEqSession(prevMainSession, open = false)
+        }
     }
 
     private fun releasePendingFadePlayer() {
