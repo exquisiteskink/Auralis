@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.audiofx.AudioEffect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -31,6 +32,7 @@ import app.auralis.music.MainActivity
 import app.auralis.music.R
 import app.auralis.music.data.player.auto.AutoLibraryCallback
 import com.google.common.collect.ImmutableList
+import kotlin.math.abs
 
 @UnstableApi
 class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
@@ -44,7 +46,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private lateinit var settings: PlayerSettings
     private val handler = Handler(Looper.getMainLooper())
     private var fadeAnim: ValueAnimator? = null
+    private var volumeAnim: ValueAnimator? = null
     private var fading = false
+    private var lastNotifiedSessionId = 0
 
     private val sleepFire = Runnable { onSleepTimerFired() }
     private val sleepState = SleepTimerState()
@@ -88,7 +92,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             .setExtras(extras)
             .build()
         installPlayerListeners(exo)
-        applyReplayGain(exo, exo.currentMediaItem)
+        applyReplayGain(exo, exo.currentMediaItem, eqMain)
         setMediaNotificationProvider(AuralisNotificationProvider(this))
         handler.post(tick)
         armSleepTimerFromSettings()
@@ -97,7 +101,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun installPlayerListeners(exo: ExoPlayer) {
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (player === exo) applyReplayGain(exo, mediaItem)
+                if (player === exo) applyReplayGain(exo, mediaItem, eqMain)
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -146,7 +150,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 eqMain.apply(settings)
                 eqFade.apply(settings)
             }
-            PlayerSettings.RG_MODE, PlayerSettings.RG_LIMIT -> applyReplayGain(exo, exo.currentMediaItem)
+            PlayerSettings.RG_MODE, PlayerSettings.RG_LIMIT -> applyReplayGain(exo, exo.currentMediaItem, eqMain)
             PlayerSettings.GAPLESS, PlayerSettings.CROSSFADE -> {
                 if (!settings.gapless) cancelCrossfade()
                 applyGapless(exo)
@@ -160,9 +164,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         handler.removeCallbacks(tick)
         handler.removeCallbacks(sleepFire)
         cancelCrossfade()
+        volumeAnim?.cancel()
+        volumeAnim = null
         settings.unregister(this)
         libraryCallback?.release()
         libraryCallback = null
+        notifyExternalEqSession(lastNotifiedSessionId, open = false)
         session?.run {
             player.release()
             release()
@@ -212,17 +219,76 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     }
 
     private fun attachEq(exo: ExoPlayer, eq: EqController) {
-        eq.attach(exo.audioSessionId, settings)
+        val prev = eq.audioSessionId
+        val sid = exo.audioSessionId
+        if (prev != 0 && prev != sid && eq === eqMain) {
+            notifyExternalEqSession(prev, open = false)
+        }
+        eq.attach(sid, settings)
+        if (eq === eqMain && sid != 0) {
+            notifyExternalEqSession(sid, open = true)
+        }
     }
 
-    private fun applyReplayGain(exo: ExoPlayer, item: MediaItem?) {
+    /**
+     * Prefer DynamicsProcessing input gain for ReplayGain (same platform path as EQ).
+     * Keep [ExoPlayer.setVolume] at 1f whenever possible so Poweramp EQ DVC (and similar
+     * external equalizers) are not fighting abrupt AudioTrack volume snaps on skip.
+     * Fallback (no DP): short smooth ramp of player volume — never a hard set.
+     */
+    private fun applyReplayGain(exo: ExoPlayer, item: MediaItem?, eq: EqController) {
         if (fading) return
         rgLinear = ReplayGainProcessor.fromExtras(
             item?.mediaMetadata?.extras,
             settings.replayGainMode,
             settings.peakLimiter,
         )
-        exo.volume = replayGainToPlayerVolume(rgLinear)
+        val viaEffect = eq.applyReplayGainLinear(rgLinear, settings)
+        if (viaEffect) {
+            setPlayerVolumeSmooth(exo, 1f)
+        } else {
+            setPlayerVolumeSmooth(exo, replayGainToPlayerVolume(rgLinear))
+        }
+    }
+
+    private fun setPlayerVolumeSmooth(exo: ExoPlayer, target: Float) {
+        volumeAnim?.cancel()
+        val from = exo.volume
+        if (abs(from - target) < 0.01f) {
+            if (from != target) exo.volume = target
+            volumeAnim = null
+            return
+        }
+        volumeAnim = ValueAnimator.ofFloat(from, target).apply {
+            duration = VOLUME_RAMP_MS
+            addUpdateListener { a ->
+                if (!fading) exo.volume = a.animatedValue as Float
+            }
+            start()
+        }
+    }
+
+    private fun notifyExternalEqSession(sessionId: Int, open: Boolean) {
+        if (sessionId == 0) return
+        if (open && sessionId == lastNotifiedSessionId) return
+        if (!open && sessionId != lastNotifiedSessionId && lastNotifiedSessionId != 0) {
+            // Already tracking a different session; still close the requested one.
+        }
+        val action = if (open) {
+            AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
+        } else {
+            AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION
+        }
+        runCatching {
+            sendBroadcast(
+                Intent(action).apply {
+                    putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
+                    putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+                    putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+                },
+            )
+        }
+        lastNotifiedSessionId = if (open) sessionId else 0
     }
 
     private fun maybeStartCrossfade() {
@@ -243,19 +309,24 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         val nextIndex = from.nextMediaItemIndex
         if (nextIndex == C.INDEX_UNSET) return
         fading = true
+        volumeAnim?.cancel()
+        volumeAnim = null
         val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
         val next = buildPlayer()
         fadePlayer = next
         applyDisconnectPolicy(next)
         attachEq(next, eqFade)
-        val nextGain = replayGainToPlayerVolume(
-            ReplayGainProcessor.fromExtras(
-                items[nextIndex].mediaMetadata.extras,
-                settings.replayGainMode,
-                settings.peakLimiter,
-            ),
+        val nextLinear = ReplayGainProcessor.fromExtras(
+            items[nextIndex].mediaMetadata.extras,
+            settings.replayGainMode,
+            settings.peakLimiter,
         )
-        val fromGain = replayGainToPlayerVolume(rgLinear)
+        // Crossfade still uses player volume envelopes (two AudioTracks). Prefer effect
+        // gain at the end; during the fade we must duck AudioTrack volumes.
+        eqFade.applyReplayGainLinear(nextLinear, settings)
+        eqMain.applyReplayGainLinear(rgLinear, settings)
+        val nextGain = replayGainToPlayerVolume(nextLinear)
+        val fromGain = from.volume.coerceIn(0.05f, 1f)
         from.pauseAtEndOfMediaItems = true
         next.setMediaItems(items, nextIndex, 0L)
         next.volume = 0f
@@ -271,29 +342,27 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
-                    finishCrossfade(from, next, nextGain)
+                    finishCrossfade(from, next, nextLinear)
                 }
-
             })
             start()
         }
     }
 
-    private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextGain: Float) {
+    private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextLinear: Float) {
         if (!fading || player !== from || fadePlayer !== next) return
         player = next
         session?.player = next
         fadePlayer = null
         from.stop()
         from.release()
-        next.volume = nextGain
-        rgLinear = nextGain
+        rgLinear = nextLinear
         fading = false
         fadeAnim = null
         applyGapless(next)
         installPlayerListeners(next)
         attachEq(next, eqMain)
-        applyReplayGain(next, next.currentMediaItem)
+        applyReplayGain(next, next.currentMediaItem, eqMain)
     }
 
     private fun armSleepTimerFromSettings() {
@@ -349,9 +418,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             it.release()
         }
         fadePlayer = null
-        player?.volume = replayGainToPlayerVolume(rgLinear)
         fading = false
-        player?.let(::applyGapless)
+        player?.let { exo ->
+            applyReplayGain(exo, exo.currentMediaItem, eqMain)
+            applyGapless(exo)
+        }
+    }
+
+    companion object {
+        private const val VOLUME_RAMP_MS = 120L
     }
 }
 
