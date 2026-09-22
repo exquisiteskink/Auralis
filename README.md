@@ -2,17 +2,17 @@
 
 Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.3.0** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.3.1** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
-1. Download `Auralis-1.3.0.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases/latest).
+1. Download `Auralis-1.3.1.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases/latest).
 2. On your phone, allow installing from the app you use to open the file.
 3. Open the APK and install.
 
 Android 8.0 (API 26) or later is required. A reachable Navidrome, Subsonic, or OpenSubsonic server is needed to sign in and download music; saved tracks can then play offline.
 
-You can install 1.3.0 over an earlier version when both were signed with the same key.
+You can install 1.3.1 over an earlier version when both were signed with the same key.
 
 ## What it does
 

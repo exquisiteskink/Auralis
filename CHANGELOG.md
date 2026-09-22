@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 — 2026-09-22
+
+### Fixed
+- Session restoration retries after transient network failures instead of leaving the app signed out until restart (#16).
+- Offline downloads trust a valid response `Content-Length`, while retaining metadata-size validation when the response length is unavailable (#18).
+- Album track lists tolerate duplicate server media IDs without Compose key collisions (#19).
+- Sleep timers survive reboot, keep monotonic timing during the same boot, and stay synchronized with Settings when cleared (#20, #22).
+- Crossfade now overlaps players without stealing audio focus, and releases the fading player's EQ before attaching EQ to the promoted player (#15, #17).
+- Queue, playback position, shuffle, and repeat state restore after process death, including service-first notification, Bluetooth, and Android Auto resumption (#21).
+
+### Validation
+- Complete unit tests, Android lint, and release APK assembly checked before publication. Device and Android Auto head-unit tests were not run.
+
 ## 1.3.0 — 2026-09-22
 
 ### Added
