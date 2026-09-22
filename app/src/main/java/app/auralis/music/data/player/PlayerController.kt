@@ -235,18 +235,78 @@ class PlayerController(
             }
             return
         }
-        if (c.isPlaying) c.pause() else {
-            if (c.playbackState == Player.STATE_IDLE) c.prepare()
+        if (c.isPlaying) {
+            c.pause()
+            return
+        }
+        // After PlaybackException ExoPlayer is IDLE with a sticky playerError until prepare succeeds.
+        if (c.playerError != null || _state.value.playbackError != null) {
+            retryPlayback()
+            return
+        }
+        if (c.playbackState == Player.STATE_IDLE) c.prepare()
+        c.play()
+    }
+
+    /**
+     * Recover from a sticky playback error without force-stopping the app.
+     * Rebuilds stream MediaItems (fresh auth query params) and prepares at the last position.
+     * Does not recreate the MediaSession / sticky audio session — service owns those.
+     */
+    fun retryPlayback() {
+        val st = _state.value
+        if (st.queue.isEmpty()) return
+        _state.update { it.copy(playbackError = "Retrying…", isPlaying = false) }
+        val c = controller
+        if (c == null) {
+            setQueue(st.queue, st.index, autoPlay = true, positionMs = st.positionMs)
+            return
+        }
+        val idx = c.currentMediaItemIndex.coerceIn(0, st.queue.lastIndex)
+        val pos = when {
+            c.currentPosition > 0L -> c.currentPosition
+            st.positionMs > 0L -> st.positionMs
+            else -> 0L
+        }
+        runCatching {
+            c.setMediaItems(st.queue.map { it.toMediaItem() }, idx, pos)
+            c.prepare()
             c.play()
+        }.onFailure {
+            _state.update { s -> s.copy(playbackError = "Connection error", isPlaying = false) }
         }
     }
 
     fun next() {
-        controller?.seekToNext()
+        val c = controller ?: return
+        if (c.playerError != null || _state.value.playbackError != null) {
+            if (c.hasNextMediaItem()) {
+                _state.update { it.copy(playbackError = null) }
+                c.seekToNextMediaItem()
+                if (c.playbackState == Player.STATE_IDLE) c.prepare()
+                c.play()
+            } else {
+                retryPlayback()
+            }
+            return
+        }
+        c.seekToNext()
     }
 
     fun previous() {
-        controller?.seekToPrevious()
+        val c = controller ?: return
+        if (c.playerError != null || _state.value.playbackError != null) {
+            if (c.hasPreviousMediaItem()) {
+                _state.update { it.copy(playbackError = null) }
+                c.seekToPreviousMediaItem()
+                if (c.playbackState == Player.STATE_IDLE) c.prepare()
+                c.play()
+            } else {
+                retryPlayback()
+            }
+            return
+        }
+        c.seekToPrevious()
     }
 
     fun seek(ms: Long) {
@@ -441,7 +501,10 @@ class PlayerController(
 
     private val listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            _state.update { it.copy(playbackError = "Playback failed: ${error.errorCodeName}", isPlaying = false) }
+            // Keep a short sticky label until STATE_READY (or explicit retryPlayback clears it).
+            _state.update {
+                it.copy(playbackError = PlaybackErrors.userMessage(error), isPlaying = false)
+            }
         }
         override fun onEvents(player: Player, events: Player.Events) {
             applyPendingRestoredPlaybackIfReady()

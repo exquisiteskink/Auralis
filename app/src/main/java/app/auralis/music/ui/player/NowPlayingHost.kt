@@ -206,6 +206,7 @@ fun NowPlayingHost(
                 .anchoredDraggable(sheetState, Orientation.Vertical)
                 .clickable { scope.launch { sheetState.animateTo(PlayerSheetValue.Player) } },
             onPlayPause = { player.playPause() },
+            onRetry = { player.retryPlayback() },
         )
 
         Box(
@@ -399,6 +400,29 @@ private fun NowPlayingPage(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            ui.playbackError?.let { err ->
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        err,
+                        color = p.primary,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Text(
+                        "Retry",
+                        modifier = Modifier.clickable { player.retryPlayback() },
+                        color = p.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
+                }
             }
 
             Spacer(Modifier.height(12.dp))
