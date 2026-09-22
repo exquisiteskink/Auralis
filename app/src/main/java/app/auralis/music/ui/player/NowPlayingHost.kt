@@ -353,10 +353,9 @@ private fun NowPlayingPage(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.width(40.dp),
                 )
-                WaveformSeekBar(
+                FlatSeekBar(
                     positionMs = positionMs,
                     durationMs = ui.durationMs,
-                    seed = song.id,
                     onSeek = { ms -> player.seek(ms) },
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )
