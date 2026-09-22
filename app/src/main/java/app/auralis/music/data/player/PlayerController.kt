@@ -9,6 +9,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionToken
 import app.auralis.music.data.download.DownloadStore
 import app.auralis.music.data.remote.Song
@@ -53,6 +54,20 @@ data class PlayerUiState(
     fun isFavorite(song: Song): Boolean = favoriteById[song.id] ?: song.isFavorite
 }
 
+internal fun PlayerUiState.withRestoredQueue(snapshot: PlaybackQueueStore.Snapshot): PlayerUiState {
+    val index = snapshot.index.coerceIn(0, snapshot.songs.lastIndex)
+    return copy(
+        queue = snapshot.songs,
+        index = index,
+        positionMs = snapshot.positionMs,
+        durationMs = snapshot.songs[index].duration?.times(1000L) ?: 0L,
+        repeatMode = snapshot.repeatMode,
+        shuffle = snapshot.shuffle,
+        upcomingIndices = null,
+        playbackError = null,
+    )
+}
+
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlayerController(
     private val context: Context,
@@ -73,6 +88,12 @@ class PlayerController(
     private var preferDark: Boolean = true
     private data class PendingQueue(val songs: List<Song>, val index: Int, val autoPlay: Boolean)
     private var pendingPlay: PendingQueue? = null
+    private val queueStore = PlaybackQueueStore(context)
+    private val queueWriter = PlaybackQueueWriter(queueStore)
+    private var lastPersistAtMs = 0L
+    private var restoreAttempted = false
+    private data class RestoredPlayback(val positionMs: Long, val shuffle: Boolean, val repeatMode: Int)
+    private var pendingRestoredPlayback: RestoredPlayback? = null
     var transcodeBitrate: Int = 0
 
     fun setPreferDark(dark: Boolean) {
@@ -107,11 +128,16 @@ class PlayerController(
                 }
                 controller = c
                 c.addListener(listener)
-                syncFromPlayer()
+                applyPendingRestoredPlaybackIfReady()
+                syncFromPlayer(preserveRestoredState = pendingRestoredPlayback != null)
                 startPositionLoop()
                 pendingPlay?.let { (songs, idx, autoPlay) ->
                     pendingPlay = null
                     setQueue(songs, idx, autoPlay)
+                } ?: maybeRestoreAfterProcessDeath(playWhenReady = false)
+                if (pendingRestoredPlayback == null) {
+                    val st = _state.value
+                    applyShuffleAndRepeat(st.shuffle, st.repeatMode)
                 }
             },
             ContextCompat.getMainExecutor(context),
@@ -122,25 +148,44 @@ class PlayerController(
         setQueue(songs, startIndex, autoPlay = true)
     }
 
-    private fun setQueue(songs: List<Song>, startIndex: Int, autoPlay: Boolean) {
+    private fun setQueue(
+        songs: List<Song>,
+        startIndex: Int,
+        autoPlay: Boolean,
+        positionMs: Long = 0L,
+    ) {
         if (songs.isEmpty()) return
         if (client.credentials == null) return
         val idx = startIndex.coerceIn(0, songs.lastIndex)
+        val pos = positionMs.coerceAtLeast(0L)
+        queueWriter.activate()
         val c = controller
         if (c == null) {
             pendingPlay = PendingQueue(songs.toList(), idx, autoPlay)
-            _state.update { it.copy(queue = songs.toList(), index = idx, isPlaying = false) }
+            _state.update {
+                it.copy(queue = songs.toList(), index = idx, positionMs = pos, isPlaying = false)
+            }
             connect()
             return
         }
         val items = songs.map { it.toMediaItem() }
         // MediaController may notify listeners synchronously from setMediaItems.
-        _state.update { it.copy(queue = songs.toList(), index = idx, positionMs = 0, durationMs = 0, upcomingIndices = null, playbackError = null) }
+        _state.update {
+            it.copy(
+                queue = songs.toList(),
+                index = idx,
+                positionMs = pos,
+                durationMs = 0,
+                upcomingIndices = null,
+                playbackError = null,
+            )
+        }
         scrobbledId = null
         c.playWhenReady = autoPlay
-        c.setMediaItems(items, idx, 0L)
+        c.setMediaItems(items, idx, pos)
         c.prepare()
         syncFromPlayer()
+        persistQueue(force = true)
     }
 
     fun applyTranscode(bps: Int) {
@@ -165,6 +210,9 @@ class PlayerController(
         connection = null
         pendingPlay = null
         scrobbledId = null
+        restoreAttempted = false
+        pendingRestoredPlayback = null
+        queueWriter.invalidateAndClear()
         runCatching {
             controller?.removeListener(listener)
             controller?.stop()
@@ -179,7 +227,12 @@ class PlayerController(
 
     fun playPause() {
         val c = controller ?: run {
-            play(_state.value.queue, _state.value.index)
+            val st = _state.value
+            if (st.queue.isNotEmpty()) {
+                setQueue(st.queue, st.index, autoPlay = true, positionMs = st.positionMs)
+            } else {
+                maybeRestoreAfterProcessDeath(playWhenReady = true)
+            }
             return
         }
         if (c.isPlaying) c.pause() else {
@@ -219,6 +272,7 @@ class PlayerController(
             it.copy(queue = q)
         }
         c.addMediaItem(insertAt, item)
+        persistQueue(force = true)
     }
 
     fun addToQueue(song: Song) {
@@ -232,6 +286,7 @@ class PlayerController(
         _state.update { it.copy(queue = it.queue + song) }
         c.addMediaItem(item)
         if (c.playbackState == Player.STATE_IDLE) c.prepare()
+        persistQueue(force = true)
     }
 
     fun playFromQueue(index: Int) {
@@ -249,12 +304,14 @@ class PlayerController(
         }
         c.repeatMode = next
         _state.update { it.copy(repeatMode = next) }
+        persistQueue(force = true)
     }
 
     fun toggleShuffle() {
         val c = controller ?: return
         c.shuffleModeEnabled = !c.shuffleModeEnabled
         _state.update { it.copy(shuffle = c.shuffleModeEnabled) }
+        persistQueue(force = true)
     }
 
     fun toggleFavorite(song: Song? = _state.value.current) {
@@ -315,19 +372,29 @@ class PlayerController(
      * Adopt a queue set by Android Auto / MediaLibrarySession without calling
      * MediaController.setMediaItems (session already applies the playable items).
      */
-    fun adoptExternalQueue(songs: List<Song>, startIndex: Int) {
+    fun adoptExternalQueue(
+        songs: List<Song>,
+        startIndex: Int,
+        positionMs: Long = 0L,
+        restoredShuffle: Boolean? = null,
+        restoredRepeatMode: Int? = null,
+        persist: Boolean = true,
+    ) {
         if (songs.isEmpty()) return
         val idx = startIndex.coerceIn(0, songs.lastIndex)
+        queueWriter.activate()
         scrobbledId = null
         listenedMs = 0
         _state.update {
             it.copy(
                 queue = songs.toList(),
                 index = idx,
-                positionMs = 0,
+                positionMs = positionMs.coerceAtLeast(0L),
                 durationMs = songs.getOrNull(idx)?.duration?.times(1000L) ?: 0L,
                 upcomingIndices = null,
                 playbackError = null,
+                shuffle = restoredShuffle ?: it.shuffle,
+                repeatMode = restoredRepeatMode ?: it.repeatMode,
             )
         }
         if (controller == null) connect()
@@ -337,6 +404,39 @@ class PlayerController(
                 refreshLyrics(it)
             }
         }
+        if (persist) persistQueue(force = true)
+    }
+
+    /**
+     * Media3 playback resumption after process death (notification / BT / Auto).
+     * Rebuilds stream MediaItems and syncs the Song queue into UI state.
+     */
+    fun resumptionMediaItems(): MediaSession.MediaItemsWithStartPosition? {
+        val snap = queueStore.load() ?: return null
+        val creds = client.credentials ?: return null
+        val key = downloadStore?.serverKey(creds)
+        if (key != null && snap.serverKey != key) {
+            queueStore.clear()
+            return null
+        }
+        if (snap.songs.isEmpty()) {
+            queueStore.clear()
+            return null
+        }
+        val idx = snap.index.coerceIn(0, snap.songs.lastIndex)
+        pendingRestoredPlayback = RestoredPlayback(snap.positionMs, snap.shuffle, snap.repeatMode)
+        _state.update { it.withRestoredQueue(snap) }
+        adoptExternalQueue(
+            songs = snap.songs,
+            startIndex = idx,
+            positionMs = snap.positionMs,
+            restoredShuffle = snap.shuffle,
+            restoredRepeatMode = snap.repeatMode,
+            persist = false,
+        )
+        applyPendingRestoredPlaybackIfReady()
+        val items = snap.songs.map { it.toMediaItem() }
+        return MediaSession.MediaItemsWithStartPosition(items, idx, snap.positionMs)
     }
 
     private val listener = object : Player.Listener {
@@ -344,14 +444,16 @@ class PlayerController(
             _state.update { it.copy(playbackError = "Playback failed: ${error.errorCodeName}", isPlaying = false) }
         }
         override fun onEvents(player: Player, events: Player.Events) {
-            syncFromPlayer()
+            applyPendingRestoredPlaybackIfReady()
+            syncFromPlayer(preserveRestoredState = pendingRestoredPlayback != null)
         }
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.update { it.copy(isPlaying = isPlaying) }
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            syncFromPlayer()
+            applyPendingRestoredPlaybackIfReady()
+            syncFromPlayer(preserveRestoredState = pendingRestoredPlayback != null)
             scrobbledId = null
             listenedMs = 0
             val song = _state.value.current
@@ -366,11 +468,16 @@ class PlayerController(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY) _state.update { it.copy(playbackError = null) }
-            syncFromPlayer()
+            applyPendingRestoredPlaybackIfReady()
+            syncFromPlayer(preserveRestoredState = pendingRestoredPlayback != null)
+        }
+
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            applyPendingRestoredPlaybackIfReady()
         }
     }
 
-    private fun syncFromPlayer() {
+    private fun syncFromPlayer(preserveRestoredState: Boolean = false) {
         val c = controller ?: return
         val idx = c.currentMediaItemIndex.coerceAtLeast(0)
         val timeline = c.currentTimeline
@@ -386,13 +493,14 @@ class PlayerController(
             it.copy(
                 index = if (it.queue.isEmpty()) 0 else idx.coerceIn(0, it.queue.lastIndex),
                 isPlaying = c.isPlaying,
-                positionMs = c.currentPosition.coerceAtLeast(0L),
+                positionMs = if (preserveRestoredState) it.positionMs else c.currentPosition.coerceAtLeast(0L),
                 durationMs = c.duration.takeIf { d -> d > 0 } ?: (it.queue.getOrNull(idx)?.duration?.times(1000L) ?: 0L),
-                repeatMode = c.repeatMode,
-                shuffle = c.shuffleModeEnabled,
+                repeatMode = if (preserveRestoredState) it.repeatMode else c.repeatMode,
+                shuffle = if (preserveRestoredState) it.shuffle else c.shuffleModeEnabled,
                 upcomingIndices = upcoming,
             )
         }
+        persistQueue(force = false)
     }
 
     private fun startPositionLoop() {
@@ -411,6 +519,7 @@ class PlayerController(
                     val pos = c.currentPosition.coerceAtLeast(0L)
                     val dur = c.duration.takeIf { it > 0 } ?: (_state.value.current?.duration?.times(1000L) ?: 0L)
                     _state.update { it.copy(positionMs = pos, durationMs = dur, isPlaying = c.isPlaying) }
+                    persistQueue(force = false)
                     val song = _state.value.current
                     if (song != null && scrobbledId != song.id && dur > 0) {
                         val threshold = minOf(30_000L, dur / 2)
@@ -457,6 +566,92 @@ class PlayerController(
             val palette = withContext(Dispatchers.Default) { PaletteExtractor.from(bmp, preferDark) }
             if (_state.value.current?.id == song.id) _state.update { it.copy(palette = palette) }
         }
+    }
+
+
+    private fun maybeRestoreAfterProcessDeath(playWhenReady: Boolean) {
+        if (restoreAttempted) return
+        restoreAttempted = true
+        if (client.credentials == null) return
+        if (_state.value.queue.isNotEmpty()) return
+        val c = controller
+        if (c != null && c.mediaItemCount > 0) return
+        val snap = queueStore.load() ?: return
+        val key = downloadStore?.serverKey(client.credentials!!)
+        if (key != null && snap.serverKey != key) {
+            queueStore.clear()
+            return
+        }
+        val idx = snap.index.coerceIn(0, snap.songs.lastIndex)
+        pendingRestoredPlayback = RestoredPlayback(snap.positionMs, snap.shuffle, snap.repeatMode)
+        _state.update { it.withRestoredQueue(snap) }
+        setQueue(
+            snap.songs,
+            idx,
+            autoPlay = playWhenReady && snap.playWhenReady,
+            positionMs = snap.positionMs,
+        )
+        applyPendingRestoredPlaybackIfReady()
+    }
+
+    /** Applies modes to the service player after Media3 installs resumed items. */
+    fun applyPendingRestoredPlaybackWhenReady(player: Player) {
+        if (applyPendingRestoredPlayback(player)) return
+        val listener = object : Player.Listener {
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (applyPendingRestoredPlayback(player)) player.removeListener(this)
+            }
+        }
+        player.addListener(listener)
+    }
+
+    private fun applyPendingRestoredPlayback(player: Player): Boolean {
+        val restored = pendingRestoredPlayback ?: return true
+        if (player.mediaItemCount == 0) return false
+        player.shuffleModeEnabled = restored.shuffle
+        player.repeatMode = restored.repeatMode
+        _state.update {
+            it.copy(
+                positionMs = restored.positionMs,
+                shuffle = restored.shuffle,
+                repeatMode = restored.repeatMode,
+            )
+        }
+        pendingRestoredPlayback = null
+        return true
+    }
+
+    private fun applyPendingRestoredPlaybackIfReady() {
+        val c = controller ?: return
+        applyPendingRestoredPlayback(c)
+    }
+
+    private fun applyShuffleAndRepeat(shuffle: Boolean, repeatMode: Int) {
+        val c = controller ?: return
+        c.shuffleModeEnabled = shuffle
+        c.repeatMode = repeatMode
+        _state.update { it.copy(shuffle = shuffle, repeatMode = repeatMode) }
+    }
+
+    private fun persistQueue(force: Boolean) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && now - lastPersistAtMs < 5_000L) return
+        val st = _state.value
+        if (st.queue.isEmpty()) return
+        val creds = client.credentials ?: return
+        val key = downloadStore?.serverKey(creds) ?: "default"
+        val c = controller
+        lastPersistAtMs = now
+        val snap = PlaybackQueueStore.Snapshot(
+            serverKey = key,
+            songs = st.queue,
+            index = st.index,
+            positionMs = (c?.currentPosition ?: st.positionMs).coerceAtLeast(0L),
+            playWhenReady = c?.playWhenReady ?: st.isPlaying,
+            shuffle = c?.shuffleModeEnabled ?: st.shuffle,
+            repeatMode = c?.repeatMode ?: st.repeatMode,
+        )
+        queueWriter.submit(snap)
     }
 
     private fun Song.toMediaItem(): MediaItem {
