@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-09-21
 
 ### Added
-- Sleep timer in Settings → Playback (15 / 30 / 45 / 60 minutes or end of track). Seek, a new queue, or resume after pause clears it.
+- Offline album/playlist downloads, account-scoped local storage, and Home → Downloads for playback after an offline restart (#5).
+- Sleep timer in Settings → Playback (15 / 30 / 45 / 60 minutes or end of track), with safe crossfade cancellation and item-boundary stopping (#4).
+- Android Auto browsing for playlists, recently played albums, favorites, and recently added albums; preserves phone queues and duplicate playlist occurrences (#8).
+- Bit depth alongside sample rate on Now Playing, using metadata for the current song and omitting unavailable values.
+- Artwork override storage and rendering scaffold with observable revisions and collision-resistant file keys; picker and app wiring remain follow-up work (#1).
+
+### Validation
+- Combined unit tests, Android lint, and APK build checked before publication. Device and Android Auto head-unit tests were not run.
 
 ## 1.1.6 — 2026-09-21
 
