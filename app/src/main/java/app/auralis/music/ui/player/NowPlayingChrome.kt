@@ -1,12 +1,16 @@
 package app.auralis.music.ui.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.splineBasedDecay
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
@@ -63,6 +67,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -81,6 +86,7 @@ import app.auralis.music.data.player.PlayerUiState
 import app.auralis.music.data.remote.formatDurationMs
 import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.SongRow
+import app.auralis.music.ui.theme.AuralisMotion
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.ui.theme.UltraBlurBackground
@@ -298,7 +304,14 @@ internal fun MiniBar(
             Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CoverArt(song.coverArt, Modifier.size(44.dp), song.title, corner = 2.dp)
+            Crossfade(
+                targetState = song.coverArt,
+                animationSpec = AuralisMotion.emphasized(AuralisMotion.DurationArtMs),
+                label = "mini-cover",
+                modifier = Modifier.size(44.dp),
+            ) { coverId ->
+                CoverArt(coverId, Modifier.fillMaxSize(), song.title, corner = 2.dp)
+            }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -341,13 +354,25 @@ internal fun ControlsDeck(ui: PlayerUiState) {
         IconButton(onClick = { player.previous() }) {
             Icon(Icons.Rounded.SkipPrevious, "Previous", tint = p.onBackground, modifier = Modifier.size(42.dp))
         }
+        val playInteraction = remember { MutableInteractionSource() }
+        val playPressed by playInteraction.collectIsPressedAsState()
+        val playScale by animateFloatAsState(
+            targetValue = if (playPressed) 0.92f else 1f,
+            animationSpec = AuralisMotion.standard(AuralisMotion.DurationPressMs),
+            label = "play-press",
+        )
         Box(
             Modifier
+                .scale(playScale)
                 .size(82.dp)
                 .shadow(8.dp, CircleShape)
                 .clip(CircleShape)
                 .background(p.playButton)
-                .clickable { player.playPause() },
+                .clickable(
+                    interactionSource = playInteraction,
+                    indication = null,
+                    onClick = { player.playPause() },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(

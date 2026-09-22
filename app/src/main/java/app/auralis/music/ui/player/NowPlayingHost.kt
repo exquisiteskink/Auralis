@@ -1,6 +1,7 @@
 package app.auralis.music.ui.player
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.splineBasedDecay
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -83,6 +84,7 @@ import app.auralis.music.data.player.PlayerUiState
 import app.auralis.music.data.remote.formatDurationMs
 import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.SongRow
+import app.auralis.music.ui.theme.AuralisMotion
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.ui.theme.UltraBlurBackground
@@ -115,7 +117,8 @@ fun NowPlayingHost(
             initialValue = PlayerSheetValue.Collapsed,
             positionalThreshold = { distance -> distance * 0.45f },
             velocityThreshold = { with(density) { 900.dp.toPx() } },
-            snapAnimationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+            // Softer settle than MediumLow — less abrupt mini↔NP landings.
+            snapAnimationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessLow),
             decayAnimationSpec = splineBasedDecay(density),
             confirmValueChange = { target -> target != PlayerSheetValue.Queue || queueComposed },
         )
@@ -194,6 +197,12 @@ fun NowPlayingHost(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = if (bottomNavVisible) 80.dp else 0.dp)
                 .navigationBarsPadding()
+                .graphicsLayer {
+                    // Fade/slide mini away as NP rises — avoids hard cut under the sheet.
+                    val progress = sheet.floatValue
+                    alpha = (1f - progress * 1.25f).coerceIn(0f, 1f)
+                    translationY = 10.dp.toPx() * progress
+                }
                 .anchoredDraggable(sheetState, Orientation.Vertical)
                 .clickable { scope.launch { sheetState.animateTo(PlayerSheetValue.Player) } },
             onPlayPause = { player.playPause() },
@@ -298,23 +307,37 @@ private fun NowPlayingPage(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            if (showLyrics) {
-                LyricsPane(
-                    lyrics = ui.lyrics,
-                    positionMs = positionMs,
-                    modifier = Modifier.size(artSize),
-                    onClose = { showLyrics = false },
-                )
-            } else {
-                CoverArt(
-                    coverId = song.coverArt,
-                    modifier = Modifier
-                        .size(artSize)
-                        .shadow(22.dp, RoundedCornerShape(14.dp))
-                        .clickable { showLyrics = true },
-                    contentDescription = song.title,
-                    corner = 14.dp,
-                )
+            Crossfade(
+                targetState = showLyrics,
+                animationSpec = AuralisMotion.emphasized(AuralisMotion.DurationArtMs),
+                label = "np-lyrics",
+                modifier = Modifier.size(artSize),
+            ) { lyricsMode ->
+                if (lyricsMode) {
+                    LyricsPane(
+                        lyrics = ui.lyrics,
+                        positionMs = positionMs,
+                        modifier = Modifier.fillMaxSize(),
+                        onClose = { showLyrics = false },
+                    )
+                } else {
+                    Crossfade(
+                        targetState = song.coverArt,
+                        animationSpec = AuralisMotion.emphasized(AuralisMotion.DurationArtMs),
+                        label = "np-cover",
+                        modifier = Modifier.fillMaxSize(),
+                    ) { coverId ->
+                        CoverArt(
+                            coverId = coverId,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .shadow(22.dp, RoundedCornerShape(14.dp))
+                                .clickable { showLyrics = true },
+                            contentDescription = song.title,
+                            corner = 14.dp,
+                        )
+                    }
+                }
             }
 
             // Breathing room under art, then seek — Plexamp-like stack.
