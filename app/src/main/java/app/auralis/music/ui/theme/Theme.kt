@@ -1,7 +1,6 @@
 package app.auralis.music.ui.theme
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -79,10 +78,26 @@ fun AuralisTheme(
             surfaceVariant = palette.surfaceHigh,
         )
     }
-    val a = animateColorAsState(palette.blurA, tween(700), label = "blurA")
-    val b = animateColorAsState(palette.blurB, tween(700), label = "blurB")
-    val c = animateColorAsState(palette.blurC, tween(700), label = "blurC")
-    val bg = animateColorAsState(palette.background, tween(700), label = "bg")
+    val a = animateColorAsState(
+        palette.blurA,
+        AuralisMotion.emphasized(AuralisMotion.DurationPaletteMs),
+        label = "blurA",
+    )
+    val b = animateColorAsState(
+        palette.blurB,
+        AuralisMotion.emphasized(AuralisMotion.DurationPaletteMs),
+        label = "blurB",
+    )
+    val c = animateColorAsState(
+        palette.blurC,
+        AuralisMotion.emphasized(AuralisMotion.DurationPaletteMs),
+        label = "blurC",
+    )
+    val bg = animateColorAsState(
+        palette.background,
+        AuralisMotion.emphasized(AuralisMotion.DurationPaletteMs),
+        label = "bg",
+    )
 
     CompositionLocalProvider(LocalPalette provides palette) {
         MaterialTheme(colorScheme = scheme, typography = AuralisTypography) {
