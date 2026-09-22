@@ -9,6 +9,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionToken
 import app.auralis.music.data.download.DownloadStore
 import app.auralis.music.data.remote.Song
@@ -73,6 +74,9 @@ class PlayerController(
     private var preferDark: Boolean = true
     private data class PendingQueue(val songs: List<Song>, val index: Int, val autoPlay: Boolean)
     private var pendingPlay: PendingQueue? = null
+    private val queueStore = PlaybackQueueStore(context)
+    private var lastPersistAtMs = 0L
+    private var restoreAttempted = false
     var transcodeBitrate: Int = 0
 
     fun setPreferDark(dark: Boolean) {
@@ -112,7 +116,9 @@ class PlayerController(
                 pendingPlay?.let { (songs, idx, autoPlay) ->
                     pendingPlay = null
                     setQueue(songs, idx, autoPlay)
-                }
+                } ?: maybeRestoreAfterProcessDeath(playWhenReady = false)
+                val st = _state.value
+                applyShuffleAndRepeat(st.shuffle, st.repeatMode)
             },
             ContextCompat.getMainExecutor(context),
         )
@@ -122,25 +128,43 @@ class PlayerController(
         setQueue(songs, startIndex, autoPlay = true)
     }
 
-    private fun setQueue(songs: List<Song>, startIndex: Int, autoPlay: Boolean) {
+    private fun setQueue(
+        songs: List<Song>,
+        startIndex: Int,
+        autoPlay: Boolean,
+        positionMs: Long = 0L,
+    ) {
         if (songs.isEmpty()) return
         if (client.credentials == null) return
         val idx = startIndex.coerceIn(0, songs.lastIndex)
+        val pos = positionMs.coerceAtLeast(0L)
         val c = controller
         if (c == null) {
             pendingPlay = PendingQueue(songs.toList(), idx, autoPlay)
-            _state.update { it.copy(queue = songs.toList(), index = idx, isPlaying = false) }
+            _state.update {
+                it.copy(queue = songs.toList(), index = idx, positionMs = pos, isPlaying = false)
+            }
             connect()
             return
         }
         val items = songs.map { it.toMediaItem() }
         // MediaController may notify listeners synchronously from setMediaItems.
-        _state.update { it.copy(queue = songs.toList(), index = idx, positionMs = 0, durationMs = 0, upcomingIndices = null, playbackError = null) }
+        _state.update {
+            it.copy(
+                queue = songs.toList(),
+                index = idx,
+                positionMs = pos,
+                durationMs = 0,
+                upcomingIndices = null,
+                playbackError = null,
+            )
+        }
         scrobbledId = null
         c.playWhenReady = autoPlay
-        c.setMediaItems(items, idx, 0L)
+        c.setMediaItems(items, idx, pos)
         c.prepare()
         syncFromPlayer()
+        persistQueue(force = true)
     }
 
     fun applyTranscode(bps: Int) {
@@ -165,6 +189,8 @@ class PlayerController(
         connection = null
         pendingPlay = null
         scrobbledId = null
+        restoreAttempted = false
+        queueStore.clear()
         runCatching {
             controller?.removeListener(listener)
             controller?.stop()
@@ -179,7 +205,12 @@ class PlayerController(
 
     fun playPause() {
         val c = controller ?: run {
-            play(_state.value.queue, _state.value.index)
+            val st = _state.value
+            if (st.queue.isNotEmpty()) {
+                setQueue(st.queue, st.index, autoPlay = true, positionMs = st.positionMs)
+            } else {
+                maybeRestoreAfterProcessDeath(playWhenReady = true)
+            }
             return
         }
         if (c.isPlaying) c.pause() else {
@@ -219,6 +250,7 @@ class PlayerController(
             it.copy(queue = q)
         }
         c.addMediaItem(insertAt, item)
+        persistQueue(force = true)
     }
 
     fun addToQueue(song: Song) {
@@ -232,6 +264,7 @@ class PlayerController(
         _state.update { it.copy(queue = it.queue + song) }
         c.addMediaItem(item)
         if (c.playbackState == Player.STATE_IDLE) c.prepare()
+        persistQueue(force = true)
     }
 
     fun playFromQueue(index: Int) {
@@ -249,12 +282,14 @@ class PlayerController(
         }
         c.repeatMode = next
         _state.update { it.copy(repeatMode = next) }
+        persistQueue(force = true)
     }
 
     fun toggleShuffle() {
         val c = controller ?: return
         c.shuffleModeEnabled = !c.shuffleModeEnabled
         _state.update { it.copy(shuffle = c.shuffleModeEnabled) }
+        persistQueue(force = true)
     }
 
     fun toggleFavorite(song: Song? = _state.value.current) {
@@ -337,6 +372,31 @@ class PlayerController(
                 refreshLyrics(it)
             }
         }
+        persistQueue(force = true)
+    }
+
+    /**
+     * Media3 playback resumption after process death (notification / BT / Auto).
+     * Rebuilds stream MediaItems and syncs the Song queue into UI state.
+     */
+    fun resumptionMediaItems(): MediaSession.MediaItemsWithStartPosition? {
+        val snap = queueStore.load() ?: return null
+        val creds = client.credentials ?: return null
+        val key = downloadStore?.serverKey(creds)
+        if (key != null && snap.serverKey != key) {
+            queueStore.clear()
+            return null
+        }
+        if (snap.songs.isEmpty()) {
+            queueStore.clear()
+            return null
+        }
+        val idx = snap.index.coerceIn(0, snap.songs.lastIndex)
+        _state.update { it.copy(shuffle = snap.shuffle, repeatMode = snap.repeatMode) }
+        adoptExternalQueue(snap.songs, idx)
+        applyShuffleAndRepeat(snap.shuffle, snap.repeatMode)
+        val items = snap.songs.map { it.toMediaItem() }
+        return MediaSession.MediaItemsWithStartPosition(items, idx, snap.positionMs)
     }
 
     private val listener = object : Player.Listener {
@@ -393,6 +453,7 @@ class PlayerController(
                 upcomingIndices = upcoming,
             )
         }
+        persistQueue(force = false)
     }
 
     private fun startPositionLoop() {
@@ -411,6 +472,7 @@ class PlayerController(
                     val pos = c.currentPosition.coerceAtLeast(0L)
                     val dur = c.duration.takeIf { it > 0 } ?: (_state.value.current?.duration?.times(1000L) ?: 0L)
                     _state.update { it.copy(positionMs = pos, durationMs = dur, isPlaying = c.isPlaying) }
+                    persistQueue(force = false)
                     val song = _state.value.current
                     if (song != null && scrobbledId != song.id && dur > 0) {
                         val threshold = minOf(30_000L, dur / 2)
@@ -457,6 +519,62 @@ class PlayerController(
             val palette = withContext(Dispatchers.Default) { PaletteExtractor.from(bmp, preferDark) }
             if (_state.value.current?.id == song.id) _state.update { it.copy(palette = palette) }
         }
+    }
+
+
+    private fun maybeRestoreAfterProcessDeath(playWhenReady: Boolean) {
+        if (restoreAttempted) return
+        restoreAttempted = true
+        if (client.credentials == null) return
+        if (_state.value.queue.isNotEmpty()) return
+        val c = controller
+        if (c != null && c.mediaItemCount > 0) return
+        val snap = queueStore.load() ?: return
+        val key = downloadStore?.serverKey(client.credentials!!)
+        if (key != null && snap.serverKey != key) {
+            queueStore.clear()
+            return
+        }
+        val idx = snap.index.coerceIn(0, snap.songs.lastIndex)
+        // Seed shuffle/repeat into UI state before setQueue so a pending connect
+        // still restores modes even if the controller is not ready yet.
+        _state.update { it.copy(shuffle = snap.shuffle, repeatMode = snap.repeatMode) }
+        setQueue(
+            snap.songs,
+            idx,
+            autoPlay = playWhenReady && snap.playWhenReady,
+            positionMs = snap.positionMs,
+        )
+        applyShuffleAndRepeat(snap.shuffle, snap.repeatMode)
+    }
+
+    private fun applyShuffleAndRepeat(shuffle: Boolean, repeatMode: Int) {
+        val c = controller ?: return
+        c.shuffleModeEnabled = shuffle
+        c.repeatMode = repeatMode
+        _state.update { it.copy(shuffle = shuffle, repeatMode = repeatMode) }
+    }
+
+    private fun persistQueue(force: Boolean) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && now - lastPersistAtMs < 5_000L) return
+        val st = _state.value
+        if (st.queue.isEmpty()) return
+        val creds = client.credentials ?: return
+        val key = downloadStore?.serverKey(creds) ?: "default"
+        val c = controller
+        lastPersistAtMs = now
+        queueStore.save(
+            PlaybackQueueStore.Snapshot(
+                serverKey = key,
+                songs = st.queue,
+                index = st.index,
+                positionMs = (c?.currentPosition ?: st.positionMs).coerceAtLeast(0L),
+                playWhenReady = c?.playWhenReady ?: st.isPlaying,
+                shuffle = c?.shuffleModeEnabled ?: st.shuffle,
+                repeatMode = c?.repeatMode ?: st.repeatMode,
+            ),
+        )
     }
 
     private fun Song.toMediaItem(): MediaItem {

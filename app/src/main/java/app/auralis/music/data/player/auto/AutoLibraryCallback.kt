@@ -98,6 +98,17 @@ class AutoLibraryCallback(
         }
     }
 
+
+    override fun onPlaybackResumption(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+        return futureValue {
+            playerController.resumptionMediaItems()
+                ?: throw UnsupportedOperationException("No persisted queue to resume")
+        }
+    }
+
     override fun onAddMediaItems(
         session: MediaSession,
         controller: MediaSession.ControllerInfo,
