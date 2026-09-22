@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.6 — Unreleased
+## 1.1.6 — 2026-09-21
 
 ### Fixed
 - Removed the large empty gap in Now Playing: the seek bar now sits beneath the artwork, with track details and playback controls grouped closely below it (#9).

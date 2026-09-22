@@ -6,13 +6,11 @@ Auralis 1.1.6 improves the Now Playing spacing and reorganizes Home.
 - Larger play/pause, skip, shuffle, and repeat icons (#9).
 - Home now starts with larger playlist cards, followed by Continue, recently played and recently added albums, compact favorite tracks, artists in rotation, and genres (#7).
 
-## Release checklist
+Download `Auralis-1.1.6.apk` below. Install over your existing Auralis release; Android 8.0 or later is required.
 
-- Set versionName to 1.1.6 and versionCode to 18 in app/build.gradle.kts.
-- Build and validate: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`.
-- Use the existing local signing keystore that signed prior APKs; a new generated key will not permit an in-place update.
-- Test Now Playing layout and controls on a device, including compact screens and larger font settings.
-- Attach the resulting APK as `Auralis-1.1.6.apk` to GitHub release `v1.1.6`.
-- Date the changelog entry and update README install/version references when publishing.
+## Validation
 
-Status: release preparation only; version bump pending, APK not built or attached, release not published.
+- Unit tests: 20 passed.
+- Android lint and APK build passed.
+- Version 1.1.6 (18); APK signature verified and signing certificate matches 1.1.5.
+- Device layout checks, including compact screens and larger fonts, were not performed because no device was connected.
