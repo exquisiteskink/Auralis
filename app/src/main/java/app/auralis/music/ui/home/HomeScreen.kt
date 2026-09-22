@@ -41,7 +41,6 @@ import app.auralis.music.ui.components.ArtistTile
 import app.auralis.music.ui.components.ErrorText
 import app.auralis.music.ui.components.GenreChip
 import app.auralis.music.ui.components.HorizontalAlbums
-import app.auralis.music.ui.components.MixOrb
 import app.auralis.music.ui.components.PlaylistCard
 import app.auralis.music.ui.components.SectionHeader
 import app.auralis.music.ui.components.SongRow
@@ -121,6 +120,23 @@ fun HomeScreen(
         }
     }
 
+    // Continue: current queue album, else first recently played — no new API.
+    val continueAlbum = remember(playerState.current, recent) {
+        val song = playerState.current
+        val albumId = song?.albumId
+        when {
+            albumId != null -> recent.firstOrNull { it.id == albumId }
+                ?: AlbumID3(
+                    id = albumId,
+                    name = song?.album.orEmpty().ifBlank { "Album" },
+                    artist = song?.artist,
+                    artistId = song?.artistId,
+                    coverArt = song?.coverArt,
+                )
+            else -> recent.firstOrNull()
+        }
+    }
+
     fun playGenre(genre: Genre) {
         scope.launch {
             val songs = suspendRunCatching { client.getSongsByGenre(genre.value, 80) }.getOrDefault(emptyList())
@@ -128,17 +144,6 @@ fun HomeScreen(
         }
     }
 
-    fun playArtistMix(artist: ArtistID3) {
-        scope.launch {
-            val top = suspendRunCatching { client.getTopSongs(artist.name, 40) }.getOrDefault(emptyList())
-            val songs = if (top.size >= 8) top else {
-                suspendRunCatching { client.getArtist(artist.id).album }.getOrDefault(emptyList())
-                    .flatMap { alb -> suspendRunCatching { client.getAlbum(alb.id).song }.getOrDefault(emptyList()) }
-                    .ifEmpty { top }
-            }
-            if (songs.isNotEmpty()) player.play(songs.shuffled(), 0)
-        }
-    }
 
     PullToRefreshBox(isRefreshing = loading, onRefresh = { scope.launch { load() } }) {
         Column(
@@ -159,25 +164,8 @@ fun HomeScreen(
                 ErrorText(error ?: "Could not load library")
             }
 
-            if (recentArtists.isNotEmpty()) {
-                SectionHeader("For you")
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    items(recentArtists.take(8), key = { "mix-${it.id}" }) { artist ->
-                        MixOrb(
-                            title = artist.name,
-                            subtitle = "Artist mix",
-                            coverId = artist.coverArt,
-                            onClick = { playArtistMix(artist) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(18.dp))
-            }
-
-            SectionHeader("Playlists")
+            // 1. Your playlists — large cards; no “For you”
+            SectionHeader("Your playlists")
             if (playlists.isEmpty() && !loading) {
                 Text(
                     "No playlists yet",
@@ -190,14 +178,37 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(playlists, key = { it.id }) { pl ->
-                        PlaylistCard(pl, onClick = { onPlaylist(pl.id) })
+                        PlaylistCard(pl, onClick = { onPlaylist(pl.id) }, width = 176.dp)
                     }
                 }
             }
             Spacer(Modifier.height(18.dp))
+
+            // 2. Continue — one album from LocalPlayer / recent
+            if (continueAlbum != null) {
+                SectionHeader("Continue")
+                HorizontalAlbums(listOf(continueAlbum)) { onAlbum(it.id) }
+                Spacer(Modifier.height(18.dp))
+            }
+
+            // 3. Recently played albums
+            if (recent.isNotEmpty()) {
+                SectionHeader("Recently played")
+                HorizontalAlbums(recent) { onAlbum(it.id) }
+                Spacer(Modifier.height(18.dp))
+            }
+
+            // 4. Recently added albums — dedicated
+            if (newest.isNotEmpty()) {
+                SectionHeader("Recently added albums")
+                HorizontalAlbums(newest) { onAlbum(it.id) }
+                Spacer(Modifier.height(18.dp))
+            }
+
+            // 5. Favorite tracks — compact
             if (favorites.isNotEmpty()) {
-                SectionHeader("Favorites") { player.play(favorites, 0) }
-                favorites.take(8).forEachIndexed { i, song ->
+                SectionHeader("Favorite tracks") { player.play(favorites, 0) }
+                favorites.take(5).forEachIndexed { i, song ->
                     SongRow(
                         song = song,
                         onClick = { player.play(favorites, i) },
@@ -206,26 +217,25 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(18.dp))
             }
-            SectionHeader("Recently played")
-            HorizontalAlbums(recent) { onAlbum(it.id) }
 
+            // 6. Artists in rotation — circular tiles (not mix orbs)
             if (recentArtists.isNotEmpty()) {
-                Spacer(Modifier.height(18.dp))
-                SectionHeader("Recently played artists")
+                SectionHeader("Artists in rotation")
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(recentArtists, key = { "ra-${it.id}" }) { artist ->
+                    items(recentArtists, key = { "rot-${it.id}" }) { artist ->
                         Column(Modifier.width(96.dp)) {
                             ArtistTile(artist, onClick = { onArtist(artist.id) }, circular = true)
                         }
                     }
                 }
+                Spacer(Modifier.height(18.dp))
             }
 
+            // 7. Genres
             if (genres.isNotEmpty()) {
-                Spacer(Modifier.height(18.dp))
                 SectionHeader("Genres")
                 FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
@@ -237,10 +247,6 @@ fun HomeScreen(
                     }
                 }
             }
-
-            Spacer(Modifier.height(18.dp))
-            SectionHeader("Recently added")
-            HorizontalAlbums(newest) { onAlbum(it.id) }
         }
     }
 }

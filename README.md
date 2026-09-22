@@ -2,26 +2,26 @@
 
 Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.1.4** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.1.6** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
-1. Download `Auralis-1.1.4.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases).
+1. Download `Auralis-1.1.6.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases/latest).
 2. On your phone, allow installing from the app you use to open the file.
 3. Open the APK and install.
 
 Android 8.0 (API 26) or later is required. You also need a reachable Navidrome, Subsonic, or OpenSubsonic server.
 
-You can install 1.1.4 over an earlier version when both were signed with the same key.
+You can install 1.1.6 over an earlier version when both were signed with the same key.
 
 ## What it does
 
-- **Home** — playlists first, then favorites, recently played albums, recently played artists, genre shuffle chips, and recently added albums. Artist mixes are built from your library.
+- **Home** — larger playlist cards first, then Continue, recently played and recently added albums, compact favorite tracks, artists in rotation, and genre shuffle chips.
 - **Artists** — four-column square grid, with a list view if you prefer.
 - **Artist page** — circular photo, play, albums, popular tracks, biography from your server, and similar artists that already exist in the library.
-- **Album and playlist pages** — cover, play/shuffle, numbered track list, and labeled sections for multi-disc albums.
-- **Search** — artists, albums, songs, and genres.
-- **Now playing** — full-screen player with album-art color wash, waveform seek bar, codec / sample rate, heart favorites, synced lyrics, and a swipe-up queue. Tap the cover or the lyrics icon. Collapse it to a mini player above the tab bar.
+- **Album and playlist pages** — cover, play/shuffle, numbered track list, and labeled sections for multi-disc albums. Albums also show the year and record label when supplied by your server.
+- **Search** — artists, albums, songs, and genres. Before you start searching, browse genre chips and recently played artists; focusing the search field switches to search results.
+- **Now playing** — full-screen player with larger cover art, a close button at the top, and the seek bar beneath the artwork, and track details and larger playback controls grouped closely below it. Includes album-art color wash, waveform seek bar, codec / sample rate, heart favorites, synced lyrics, and a swipe-up queue. Tap the cover or the lyrics icon. Collapse it to a mini player above the tab bar.
 - **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, 10-band EQ with general presets, pause on headphone/Bluetooth disconnect, lock-screen and notification controls.
 
 Colors on the player and throughout the app are sampled from the current cover (dark and light). The seek bar uses that highlight color.
