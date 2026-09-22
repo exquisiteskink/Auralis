@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 — 2026-09-22
+
+### Added
+- Softer motion throughout Home, navigation, Now Playing, and the mini-player: shared motion tokens, gentle list snap settling, card and play-button press feedback, smoother palette changes, and album-art crossfades (#11, #12, #13).
+
+### Fixed
+- ReplayGain now uses `DynamicsProcessing` input gain when available, keeping the player volume at unity and avoiding the hard volume jumps that could conflict with Poweramp Equalizer DVC on track changes (#10).
+- External equalizers receive audio-effect control-session open/close broadcasts; platforms without `DynamicsProcessing` use a short smooth volume ramp as a fallback (#10).
+
+### Validation
+- Combined unit tests, Android lint, and APK build checked before publication. Device testing, including Poweramp DVC validation, was not run.
+
 ## 1.2.0 — 2026-09-21
 
 ### Added
