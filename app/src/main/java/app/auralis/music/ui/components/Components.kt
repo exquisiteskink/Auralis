@@ -1,6 +1,16 @@
 package app.auralis.music.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.composed
+import app.auralis.music.ui.theme.AuralisMotion
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,7 +45,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +71,21 @@ import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import coil.compose.AsyncImage
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+
+
+/** Soft press scale — keeps ripple via default [clickable] indication. */
+private fun Modifier.pressScale(onClick: () -> Unit): Modifier = composed {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = AuralisMotion.standard(AuralisMotion.DurationPressMs),
+        label = "card-press",
+    )
+    this
+        .scale(scale)
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+}
 
 @Composable
 fun GlassSurface(
@@ -90,7 +114,6 @@ fun CoverArt(
 ) {
     val client = LocalClient.current
     val p = LocalPalette.current
-    // Artwork supplied by the server must not open local files/content providers.
     val url = imageUrl?.toHttpUrlOrNull()?.takeIf {
         it.username.isEmpty() && it.password.isEmpty()
     }?.toString() ?: client.coverUrl(coverId, 600)
@@ -197,7 +220,7 @@ fun AlbumCard(
     Column(
         modifier
             .width(width)
-            .clickable(onClick = onClick),
+            .pressScale(onClick),
     ) {
         CoverArt(album.coverArt, Modifier.fillMaxWidth().aspectRatio(1f), album.displayName, corner = 6.dp)
         Spacer(Modifier.height(8.dp))
@@ -214,7 +237,7 @@ fun PlaylistCard(
     width: Dp = 148.dp,
 ) {
     val p = LocalPalette.current
-    Column(modifier.width(width).clickable(onClick = onClick)) {
+    Column(modifier.width(width).pressScale(onClick)) {
         CoverArt(playlist.coverArt, Modifier.fillMaxWidth().aspectRatio(1f), playlist.name, corner = 6.dp)
         Spacer(Modifier.height(8.dp))
         Text(playlist.name, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium, fontSize = 14.sp)
@@ -235,7 +258,7 @@ fun ArtistTile(
 ) {
     val p = LocalPalette.current
     val client = LocalClient.current
-    Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier.pressScale(onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         CoverArt(
             coverId = artist.coverArt ?: artist.id,
             modifier = Modifier.fillMaxWidth().aspectRatio(1f),
@@ -257,12 +280,17 @@ fun ArtistTile(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HorizontalAlbums(
     albums: List<AlbumID3>,
     onAlbum: (AlbumID3) -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    val snap = rememberSnapFlingBehavior(lazyListState = listState)
     LazyRow(
+        state = listState,
+        flingBehavior = snap,
         contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
