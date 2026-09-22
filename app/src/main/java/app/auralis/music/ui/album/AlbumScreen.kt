@@ -200,7 +200,7 @@ fun AlbumScreen(
                     )
                 }
             }
-            itemsIndexed(section.songs, key = { _, song -> song.id }) { sectionIndex, song ->
+            itemsIndexed(section.songs, key = { sectionIndex, song -> "${song.id}-$sectionIndex-${section.number}" }) { sectionIndex, song ->
                 SongRow(
                     song = song,
                     showArtist = true,
