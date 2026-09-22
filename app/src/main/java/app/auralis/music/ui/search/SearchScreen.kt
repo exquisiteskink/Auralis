@@ -1,9 +1,11 @@
 package app.auralis.music.ui.search
 
 import app.auralis.music.data.remote.suspendRunCatching
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,11 +18,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,11 +36,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -41,6 +52,7 @@ import app.auralis.music.data.remote.AlbumID3
 import app.auralis.music.data.remote.ArtistID3
 import app.auralis.music.data.remote.Genre
 import app.auralis.music.data.remote.SearchResult3
+import app.auralis.music.data.remote.Song
 import app.auralis.music.ui.components.ArtistTile
 import app.auralis.music.ui.components.GenreChip
 import app.auralis.music.ui.components.HorizontalAlbums
@@ -52,7 +64,7 @@ import app.auralis.music.ui.theme.LocalPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     onArtist: (String) -> Unit,
@@ -67,6 +79,7 @@ fun SearchScreen(
     var result by remember { mutableStateOf(SearchResult3()) }
     var allGenres by remember { mutableStateOf<List<Genre>>(emptyList()) }
     var recentAlbums by remember { mutableStateOf<List<AlbumID3>>(emptyList()) }
+    var songForActions by remember { mutableStateOf<Song?>(null) }
 
     LaunchedEffect(Unit) {
         allGenres = suspendRunCatching { client.getGenres() }.getOrDefault(emptyList()).filter { it.value.isNotBlank() }
@@ -204,10 +217,10 @@ fun SearchScreen(
                 }
                 if (result.song.isNotEmpty()) {
                     item { SectionHeader("Songs") }
-                    itemsIndexed(result.song, key = { i, s -> "${s.id}-$i" }) { i, song ->
+                    itemsIndexed(result.song, key = { i, s -> "${s.id}-$i" }) { _, song ->
                         SongRow(
                             song = song,
-                            onClick = { player.play(result.song, i) },
+                            onClick = { songForActions = song },
                         )
                     }
                 }
@@ -222,6 +235,93 @@ fun SearchScreen(
                 }
             }
         }
+    }
+
+    val actionsSong = songForActions
+    if (actionsSong != null) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { songForActions = null },
+            sheetState = sheetState,
+            containerColor = p.surface,
+            contentColor = p.onBackground,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 28.dp)) {
+                Text(
+                    actionsSong.title,
+                    color = p.onBackground,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                )
+                if (!actionsSong.artist.isNullOrBlank()) {
+                    Text(
+                        actionsSong.artist,
+                        color = p.onBackground.copy(alpha = 0.55f),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 24.dp, bottom = 12.dp),
+                    )
+                } else {
+                    Spacer(Modifier.height(8.dp))
+                }
+                SearchSongActionRow(
+                    icon = Icons.Rounded.PlayArrow,
+                    label = "Play song",
+                    onClick = {
+                        val songs = result.song
+                        val index = songs.indexOfFirst { it.id == actionsSong.id }.coerceAtLeast(0)
+                        player.play(if (songs.isNotEmpty()) songs else listOf(actionsSong), index)
+                        songForActions = null
+                    },
+                )
+                val artistId = actionsSong.artistId
+                if (!artistId.isNullOrBlank()) {
+                    SearchSongActionRow(
+                        icon = Icons.Rounded.Person,
+                        label = "Go to artist",
+                        onClick = {
+                            songForActions = null
+                            onArtist(artistId)
+                        },
+                    )
+                }
+                val albumId = actionsSong.albumId
+                if (!albumId.isNullOrBlank()) {
+                    SearchSongActionRow(
+                        icon = Icons.Rounded.Album,
+                        label = "Go to album",
+                        onClick = {
+                            songForActions = null
+                            onAlbum(albumId)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSongActionRow(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = p.onBackground.copy(alpha = 0.75f))
+        Spacer(Modifier.width(16.dp))
+        Text(label, color = p.onBackground, fontSize = 16.sp)
     }
 }
 
