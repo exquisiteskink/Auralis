@@ -9,6 +9,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
 
 class PlaybackQueueStoreTest {
     @get:Rule
@@ -62,5 +65,66 @@ class PlaybackQueueStoreTest {
         s.save(PlaybackQueueStore.Snapshot(serverKey = "srv", songs = listOf(Song(id = "1"))))
         s.save(PlaybackQueueStore.Snapshot(serverKey = "srv", songs = emptyList()))
         assertNull(s.load())
+    }
+
+    @Test
+    fun rapidSnapshotsCompleteInLogicalOrder() = runBlocking {
+        val completed = mutableListOf<String>()
+        val writer = PlaybackQueueWriter(
+            saveSnapshot = { snapshot ->
+                if (snapshot.songs.single().id == "old") Thread.sleep(40)
+                synchronized(completed) { completed += snapshot.songs.single().id }
+            },
+            clearStore = {},
+        )
+
+        writer.submit(PlaybackQueueStore.Snapshot(serverKey = "srv", songs = listOf(Song("old"))))
+        writer.submit(PlaybackQueueStore.Snapshot(serverKey = "srv", songs = listOf(Song("new"))))
+        writer.awaitIdle()
+
+        assertEquals(listOf("old", "new"), completed)
+    }
+
+    @Test
+    fun clearRacingPendingWriteCannotRecreateOldQueue() = runBlocking {
+        val enteredSave = CountDownLatch(1)
+        val releaseSave = CountDownLatch(1)
+        var stored: PlaybackQueueStore.Snapshot? = null
+        val writer = PlaybackQueueWriter(
+            saveSnapshot = {
+                enteredSave.countDown()
+                releaseSave.await()
+                stored = it
+            },
+            clearStore = { stored = null },
+        )
+        writer.submit(PlaybackQueueStore.Snapshot(serverKey = "srv", songs = listOf(Song("old"))))
+        enteredSave.await()
+
+        val clearing = thread { writer.invalidateAndClear() }
+        releaseSave.countDown()
+        clearing.join()
+        writer.awaitIdle()
+
+        assertNull(stored)
+    }
+
+    @Test
+    fun restoredStatePreservesPositionShuffleAndRepeat() {
+        val snapshot = PlaybackQueueStore.Snapshot(
+            serverKey = "srv",
+            songs = listOf(Song("one"), Song("two", duration = 180)),
+            index = 1,
+            positionMs = 42_000L,
+            shuffle = true,
+            repeatMode = 2,
+        )
+
+        val restored = PlayerUiState().withRestoredQueue(snapshot)
+
+        assertEquals(1, restored.index)
+        assertEquals(42_000L, restored.positionMs)
+        assertTrue(restored.shuffle)
+        assertEquals(2, restored.repeatMode)
     }
 }

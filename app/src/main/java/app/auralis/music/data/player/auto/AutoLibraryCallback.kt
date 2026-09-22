@@ -104,8 +104,12 @@ class AutoLibraryCallback(
         controller: MediaSession.ControllerInfo,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
         return futureValue {
-            playerController.resumptionMediaItems()
-                ?: throw UnsupportedOperationException("No persisted queue to resume")
+            val resumed = loadPlaybackResumption(
+                restoreSession = container::restoreSession,
+                loadItems = playerController::resumptionMediaItems,
+            )
+            playerController.applyPendingRestoredPlaybackWhenReady(session.player)
+            resumed
         }
     }
 
@@ -149,4 +153,12 @@ class AutoLibraryCallback(
         future.addListener({ if (future.isCancelled) job.cancel() }, { it.run() })
         return future
     }
+}
+
+internal suspend fun <T : Any> loadPlaybackResumption(
+    restoreSession: suspend () -> Unit,
+    loadItems: () -> T?,
+): T {
+    restoreSession()
+    return loadItems() ?: throw UnsupportedOperationException("No persisted queue to resume")
 }
