@@ -65,6 +65,7 @@ fun SettingsScreen(
     var crossfade by remember { mutableStateOf(playerPrefs.crossfade) }
     var fadeMs by remember { mutableStateOf(playerPrefs.crossfadeMs.toFloat()) }
     var pauseDisc by remember { mutableStateOf(playerPrefs.pauseOnDisconnect) }
+    var sleepMins by remember { mutableStateOf(playerPrefs.sleepTimerMinutes) }
     var eqOn by remember { mutableStateOf(playerPrefs.eqEnabled) }
     var eqPreset by remember { mutableStateOf(playerPrefs.eqPreset) }
     var eqGains by remember { mutableStateOf(playerPrefs.eqGains.copyOf()) }
@@ -179,7 +180,7 @@ fun SettingsScreen(
             if (crossfade && gapless) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Crossfade length  ${PlayerSettings.crossfadeLabel(fadeMs.toInt())}",
+                    "Crossfade length ${PlayerSettings.crossfadeLabel(fadeMs.toInt())}",
                     color = p.onBackground.copy(alpha = 0.7f),
                     fontSize = 13.sp,
                 )
@@ -198,6 +199,32 @@ fun SettingsScreen(
                 checked = pauseDisc,
                 onChecked = { pauseDisc = it; playerPrefs.pauseOnDisconnect = it },
             )
+
+            Spacer(Modifier.height(12.dp))
+            Text("Sleep timer", color = p.onBackground, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
+            listOf(
+                0 to "Off",
+                15 to "15 minutes",
+                30 to "30 minutes",
+                45 to "45 minutes",
+                60 to "60 minutes",
+                PlayerSettings.SLEEP_END_OF_TRACK to "End of track",
+            ).forEach { (value, label) ->
+                RadioRow(
+                    selected = sleepMins == value,
+                    label = label,
+                    onClick = {
+                        sleepMins = value
+                        when (value) {
+                            0 -> playerPrefs.clearSleepTimer()
+                            PlayerSettings.SLEEP_END_OF_TRACK -> playerPrefs.armSleepEndOfTrack()
+                            else -> playerPrefs.armSleepMinutes(value)
+                        }
+                    },
+                )
+            }
+            Hint("Pauses playback after the chosen time. Seek, a new queue, or resume after pause clears it.")
         }
 
         SettingsGroup("Equalizer") {

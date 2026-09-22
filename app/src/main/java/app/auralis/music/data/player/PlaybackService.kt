@@ -9,9 +9,11 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Timeline
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -41,6 +43,9 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
     private val handler = Handler(Looper.getMainLooper())
     private var fadeAnim: ValueAnimator? = null
     private var fading = false
+
+    private val sleepFire = Runnable { onSleepTimerFired() }
+    private val sleepState = SleepTimerState()
 
     private val tick = object : Runnable {
         override fun run() {
@@ -91,28 +96,54 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
             .setSessionActivity(openApp)
             .setExtras(extras)
             .build()
+        installPlayerListeners(exo)
+        applyReplayGain(exo, exo.currentMediaItem)
+        setMediaNotificationProvider(AuralisNotificationProvider(this))
+        handler.post(tick)
+        armSleepTimerFromSettings()
+    }
+
+    private fun installPlayerListeners(exo: ExoPlayer) {
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                applyReplayGain(exo, mediaItem)
+                if (player === exo) applyReplayGain(exo, mediaItem)
             }
+
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                attachEq(exo, eqMain)
+                if (player === exo) attachEq(exo, eqMain)
             }
+
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
                 newPosition: Player.PositionInfo,
                 reason: Int,
             ) {
-                if (reason == Player.DISCONTINUITY_REASON_SEEK ||
-                    reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
-                ) {
-                    if (reason == Player.DISCONTINUITY_REASON_SEEK) cancelCrossfade()
+                if (player !== exo) return
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    cancelCrossfade()
+                    cancelSleepFromUser()
+                }
+            }
+
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                if (player === exo && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+                    cancelCrossfade()
+                    cancelSleepFromUser()
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (player !== exo) return
+                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                    cancelCrossfade()
+                }
+                when (sleepState.onPlayWhenReadyChanged(playWhenReady, reason)) {
+                    SleepTimerState.Action.Fire -> onSleepTimerFired()
+                    SleepTimerState.Action.Cancel -> cancelSleepFromUser()
+                    SleepTimerState.Action.None -> Unit
                 }
             }
         })
-        applyReplayGain(exo, exo.currentMediaItem)
-        setMediaNotificationProvider(AuralisNotificationProvider(this))
-        handler.post(tick)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -130,11 +161,13 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
                 applyGapless(exo)
             }
             PlayerSettings.PAUSE_DISC -> applyDisconnectPolicy(exo)
+            PlayerSettings.SLEEP_MINUTES, PlayerSettings.SLEEP_DEADLINE -> armSleepTimerFromSettings()
         }
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(sleepFire)
         cancelCrossfade()
         settings.unregister(this)
         session?.run {
@@ -176,7 +209,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
     }
 
     private fun applyGapless(exo: ExoPlayer) {
-        exo.pauseAtEndOfMediaItems = false
+        exo.pauseAtEndOfMediaItems = sleepState.endOfTrack || (fading && player === exo)
         exo.skipSilenceEnabled = false
     }
 
@@ -200,7 +233,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
     }
 
     private fun maybeStartCrossfade() {
-        if (fading) return
+        if (fading || sleepState.endOfTrack) return
         if (!settings.gapless || !settings.crossfade) return
         val exo = player ?: return
         if (!exo.isPlaying) return
@@ -247,45 +280,75 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     finishCrossfade(from, next, nextGain)
                 }
-                override fun onAnimationCancel(animation: android.animation.Animator) {
-                    next.stop()
-                    next.release()
-                    if (fadePlayer === next) fadePlayer = null
-                    from.volume = fromGain
-                    fading = false
-                }
+
             })
             start()
         }
     }
 
     private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextGain: Float) {
-        if (player !== from) {
-            next.release()
-            fading = false
-            return
-        }
-        session?.player = next
+        if (!fading || player !== from || fadePlayer !== next) return
         player = next
+        session?.player = next
         fadePlayer = null
         from.stop()
         from.release()
         next.volume = nextGain
         rgLinear = nextGain
         fading = false
-        next.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                applyReplayGain(next, mediaItem)
-            }
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                attachEq(next, eqMain)
-            }
-        })
+        fadeAnim = null
+        applyGapless(next)
+        installPlayerListeners(next)
         attachEq(next, eqMain)
         applyReplayGain(next, next.currentMediaItem)
     }
 
+    private fun armSleepTimerFromSettings() {
+        handler.removeCallbacks(sleepFire)
+        sleepState.arm(settings.sleepTimerMinutes)
+        if (sleepState.endOfTrack) cancelCrossfade()
+        player?.let(::applyGapless)
+        when (val minutes = settings.sleepTimerMinutes) {
+            0 -> Unit
+            PlayerSettings.SLEEP_END_OF_TRACK -> {
+                // ExoPlayer pauses at the item boundary, including repeat, without polling.
+            }
+            else -> {
+                val deadline = settings.sleepDeadlineElapsed
+                val delay = if (deadline > 0L) {
+                    deadline - SystemClock.elapsedRealtime()
+                } else {
+                    minutes * 60_000L
+                }
+                if (delay <= 0L) {
+                    onSleepTimerFired()
+                } else {
+                    handler.postDelayed(sleepFire, delay)
+                }
+            }
+        }
+    }
+
+    private fun onSleepTimerFired() {
+        handler.removeCallbacks(sleepFire)
+        sleepState.arm(0)
+        // Detach the animation callbacks before cancellation: cancel also dispatches end.
+        cancelCrossfade()
+        player?.pause()
+        settings.clearSleepTimer()
+    }
+
+    private fun cancelSleepFromUser() {
+        if (settings.sleepTimerMinutes == 0 && !sleepState.endOfTrack) return
+        handler.removeCallbacks(sleepFire)
+        sleepState.arm(0)
+        player?.let(::applyGapless)
+        settings.clearSleepTimer()
+    }
+
     private fun cancelCrossfade() {
+        fadeAnim?.removeAllListeners()
+        fadeAnim?.removeAllUpdateListeners()
         fadeAnim?.cancel()
         fadeAnim = null
         fadePlayer?.let {
@@ -295,6 +358,7 @@ class PlaybackService : MediaSessionService(), SharedPreferences.OnSharedPrefere
         fadePlayer = null
         player?.volume = replayGainToPlayerVolume(rgLinear)
         fading = false
+        player?.let(::applyGapless)
     }
 }
 
