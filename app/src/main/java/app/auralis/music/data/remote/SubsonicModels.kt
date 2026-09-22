@@ -90,6 +90,11 @@ data class ArtistWithAlbums(
 )
 
 @Serializable
+data class RecordLabel(
+    val name: String = "",
+)
+
+@Serializable
 data class AlbumID3(
     @Serializable(with = FlexibleStringSerializer::class) val id: String,
     val name: String = "",
@@ -105,6 +110,8 @@ data class AlbumID3(
     val year: Int = 0,
     val genre: String? = null,
     val starred: String? = null,
+    @Serializable(with = RecordLabelListSerializer::class)
+    val recordLabels: List<RecordLabel> = emptyList(),
 ) {
     val displayName: String get() = name.ifBlank { title ?: album ?: "Album" }
 }
@@ -122,6 +129,8 @@ data class AlbumWithSongs(
     val year: Int = 0,
     val genre: String? = null,
     val starred: String? = null,
+    @Serializable(with = RecordLabelListSerializer::class)
+    val recordLabels: List<RecordLabel> = emptyList(),
     @Serializable(with = SongListSerializer::class)
     val song: List<Song> = emptyList(),
 ) {
@@ -283,6 +292,7 @@ object SimilarArtistListSerializer : FlexListSerializer<SimilarArtist>(SimilarAr
 object OpenSubsonicExtensionListSerializer :
     FlexListSerializer<OpenSubsonicExtension>(OpenSubsonicExtension.serializer())
 object GenreListSerializer : FlexListSerializer<Genre>(Genre.serializer())
+object RecordLabelListSerializer : FlexListSerializer<RecordLabel>(RecordLabel.serializer())
 object StructuredLyricsListSerializer : FlexListSerializer<StructuredLyrics>(StructuredLyrics.serializer())
 object LyricLineListSerializer : FlexListSerializer<LyricLine>(LyricLine.serializer())
 
