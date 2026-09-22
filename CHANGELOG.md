@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6 — 2026-09-21
+
+### Fixed
+- Removed the large empty gap in Now Playing: the seek bar now sits beneath the artwork, with track details and playback controls grouped closely below it (#9).
+
+### Changed
+- Enlarged the Now Playing playback controls (#9).
+- Reorganized Home around larger playlist cards, Continue, recently played and recently added albums, compact favorite tracks, artists in rotation, and genres; removed the For you artist-mix section (#7).
+
 ## 1.1.5 — 2026-09-20
 
 ### Added
