@@ -6,11 +6,13 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -34,6 +36,15 @@ import app.auralis.music.data.player.auto.AutoLibraryCallback
 import com.google.common.collect.ImmutableList
 import kotlin.math.abs
 
+/**
+ * Playback service with a **sticky lifetime audio session** for Poweramp EQ DVC.
+ *
+ * Option A (maxmpz guidance): one [AudioManager.generateAudioSessionId] for the
+ * whole service life; every ExoPlayer (primary + crossfade) uses that id; OPEN
+ * once before audible output; CLOSE only on [onDestroy]. Mute-until-bound covers
+ * cold start / resume and rare unexpected session changes — not the primary path
+ * for skip/CF (those stay on the sticky id with no CLOSE/OPEN).
+ */
 @UnstableApi
 class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private var player: ExoPlayer? = null
@@ -53,6 +64,13 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private var pendingNextLinear = 1f
     private var lastNotifiedSessionId = 0
 
+    /** Service-lifetime session; 0 only if [AudioManager.generateAudioSessionId] failed. */
+    private var stickySessionId = 0
+
+    /** True while muted waiting for OPEN settle (cold start / unexpected rebind). */
+    private var sessionBindPending = false
+    private var settleRunnable: Runnable? = null
+
     private val sleepFire = Runnable { onSleepTimerFired() }
     private val sleepState = SleepTimerState()
 
@@ -68,11 +86,17 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         settings = PlayerSettings(this)
         settings.register(this)
 
+        // 1) Allocate sticky session at service start — NOT deferred to first prepare.
+        stickySessionId = generateStickySessionId()
+
         val exo = buildPlayer()
         player = exo
         applyGapless(exo)
         applyDisconnectPolicy(exo)
-        attachEq(exo, eqMain)
+
+        // 2) Attach platform EQ/RG on sticky id, then OPEN before any audible output.
+        // Cold start stays muted until settle completes (same guard as unexpected rebind).
+        attachEq(exo, eqMain, openExternal = true, muteUntilBound = stickySessionId != 0)
 
         val openApp = PendingIntent.getActivity(
             this,
@@ -95,10 +119,24 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             .setExtras(extras)
             .build()
         installPlayerListeners(exo)
-        applyReplayGain(exo, exo.currentMediaItem, eqMain)
+        // applyReplayGain runs after settle when muteUntilBound; otherwise now.
+        if (!sessionBindPending) {
+            applyReplayGain(exo, exo.currentMediaItem, eqMain)
+        }
         setMediaNotificationProvider(AuralisNotificationProvider(this))
         handler.post(tick)
         armSleepTimerFromSettings()
+    }
+
+    private fun generateStickySessionId(): Int {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val id = am.generateAudioSessionId()
+        if (id == AudioManager.ERROR || id <= 0) {
+            Log.w(TAG, "generateAudioSessionId failed: $id — falling back to ExoPlayer auto session")
+            return 0
+        }
+        Log.i(TAG, "stickySessionId=$id (service lifetime)")
+        return id
     }
 
     private fun installPlayerListeners(exo: ExoPlayer) {
@@ -108,7 +146,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                if (player === exo) attachEq(exo, eqMain)
+                if (player !== exo) return
+                onPrimarySessionIdChanged(exo, audioSessionId)
             }
 
             override fun onPositionDiscontinuity(
@@ -135,6 +174,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
                     cancelCrossfade()
                 }
+                // Resume after pause: if somehow unbound, re-assert mute-until-bound.
+                if (playWhenReady && stickySessionId != 0 &&
+                    exo.audioSessionId != stickySessionId && !sessionBindPending
+                ) {
+                    beginMuteUntilBound(exo, eqMain, reason = "resume-mismatch")
+                }
                 when (sleepState.onPlayWhenReadyChanged(playWhenReady, reason)) {
                     SleepTimerState.Action.Fire -> onSleepTimerFired()
                     SleepTimerState.Action.Cancel -> cancelSleepFromUser()
@@ -142,6 +187,33 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 }
             }
         })
+    }
+
+    /**
+     * Sticky path: session should never change. If ExoPlayer forces a new id
+     * (format recreate / AudioTrack rebuild), mute → re-assert sticky → OPEN → settle → ramp.
+     */
+    private fun onPrimarySessionIdChanged(exo: ExoPlayer, audioSessionId: Int) {
+        if (stickySessionId != 0 && audioSessionId == stickySessionId) {
+            // Confirm sticky; keep EQ attached; do NOT CLOSE/OPEN.
+            if (eqMain.audioSessionId != stickySessionId) {
+                eqMain.attach(stickySessionId, settings)
+            }
+            if (lastNotifiedSessionId != stickySessionId) {
+                notifyExternalEqSession(stickySessionId, open = true)
+            }
+            return
+        }
+        if (stickySessionId != 0 && audioSessionId != 0 && audioSessionId != stickySessionId) {
+            Log.w(
+                TAG,
+                "unexpected session change: got=$audioSessionId sticky=$stickySessionId — mute/rebind safety net",
+            )
+            beginMuteUntilBound(exo, eqMain, reason = "session-changed")
+            return
+        }
+        // No sticky (generation failed): legacy attach with OPEN-before-CLOSE.
+        attachEq(exo, eqMain, openExternal = true, muteUntilBound = true)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibraryService.MediaLibrarySession? = session
@@ -170,13 +242,20 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(sleepFire)
+        settleRunnable?.let { handler.removeCallbacks(it) }
+        settleRunnable = null
         cancelCrossfade()
         volumeAnim?.cancel()
         volumeAnim = null
         settings.unregister(this)
         libraryCallback?.release()
         libraryCallback = null
-        notifyExternalEqSession(lastNotifiedSessionId, open = false)
+        // CLOSE only on service destroy — never on skip / promote / track change.
+        if (lastNotifiedSessionId != 0) {
+            notifyExternalEqSession(lastNotifiedSessionId, open = false)
+        } else if (stickySessionId != 0) {
+            notifyExternalEqSession(stickySessionId, open = false)
+        }
         session?.run {
             player.release()
             release()
@@ -187,13 +266,18 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         session = null
         player = null
         fadePlayer = null
+        stickySessionId = 0
         super.onDestroy()
     }
 
+    /**
+     * Build ExoPlayer and **always** [ExoPlayer.setAudioSessionId] sticky id before any
+     * prepare / setMediaItems that create an AudioTrack.
+     */
     private fun buildPlayer(handleAudioFocus: Boolean = true): ExoPlayer {
         val http = OkHttpDataSource.Factory((application as AuralisApp).container.client.http)
             .setUserAgent("Auralis/${app.auralis.music.BuildConfig.VERSION_NAME}")
-        return ExoPlayer.Builder(this)
+        val exo = ExoPlayer.Builder(this)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(this)
                     .setDataSourceFactory(DefaultDataSource.Factory(this, http)),
@@ -210,6 +294,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             .setHandleAudioBecomingNoisy(settings.pauseOnDisconnect)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        if (stickySessionId != 0) {
+            exo.setAudioSessionId(stickySessionId)
+            Log.d(TAG, "setAudioSessionId($stickySessionId) on new ExoPlayer")
+        }
+        return exo
     }
 
     private fun mediaAudioAttributes(): AudioAttributes =
@@ -228,16 +317,80 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         fadePlayer?.setHandleAudioBecomingNoisy(settings.pauseOnDisconnect)
     }
 
-    private fun attachEq(exo: ExoPlayer, eq: EqController) {
-        val prev = eq.audioSessionId
-        val sid = exo.audioSessionId
-        if (prev != 0 && prev != sid && eq === eqMain) {
-            notifyExternalEqSession(prev, open = false)
+    /**
+     * Attach built-in EQ/RG (DynamicsProcessing) to the player's session.
+     * With sticky id: never CLOSE here — only OPEN once via [notifyExternalEqSession].
+     * [muteUntilBound]: cold start / unexpected rebind — keep volume at 0 until settle.
+     */
+    private fun attachEq(
+        exo: ExoPlayer,
+        eq: EqController,
+        openExternal: Boolean,
+        muteUntilBound: Boolean,
+    ) {
+        val sid = when {
+            stickySessionId != 0 -> {
+                if (exo.audioSessionId != stickySessionId) {
+                    runCatching { exo.setAudioSessionId(stickySessionId) }
+                }
+                stickySessionId
+            }
+            else -> exo.audioSessionId
         }
+        if (sid == 0) {
+            eq.attach(exo.audioSessionId, settings)
+            return
+        }
+
+        val prev = eq.audioSessionId
+        // Sticky path: do not CLOSE on attach / track change.
+        if (stickySessionId == 0 && prev != 0 && prev != sid && eq === eqMain && openExternal) {
+            // Legacy fallback only: OPEN before CLOSE (no unbound advertise window).
+            eq.attach(sid, settings)
+            if (openExternal) {
+                notifyExternalEqSession(sid, open = true)
+                notifyExternalEqSession(prev, open = false)
+            }
+            if (muteUntilBound) beginMuteUntilBound(exo, eq, reason = "legacy-attach")
+            return
+        }
+
         eq.attach(sid, settings)
-        if (eq === eqMain && sid != 0) {
+        if (eq === eqMain && openExternal) {
             notifyExternalEqSession(sid, open = true)
         }
+        if (muteUntilBound && eq === eqMain) {
+            beginMuteUntilBound(exo, eq, reason = "cold-or-rebind")
+        }
+    }
+
+    private fun beginMuteUntilBound(exo: ExoPlayer, eq: EqController, reason: String) {
+        Log.i(TAG, "mute-until-bound ($reason) sticky=$stickySessionId exoSid=${exo.audioSessionId}")
+        volumeAnim?.cancel()
+        volumeAnim = null
+        sessionBindPending = true
+        exo.volume = 0f
+
+        if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
+            runCatching { exo.setAudioSessionId(stickySessionId) }
+        }
+        val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
+        if (sid != 0) {
+            eq.attach(sid, settings)
+            notifyExternalEqSession(sid, open = true)
+        }
+
+        settleRunnable?.let { handler.removeCallbacks(it) }
+        val token = exo
+        val settle = Runnable {
+            if (player !== token) return@Runnable
+            sessionBindPending = false
+            settleRunnable = null
+            Log.i(TAG, "settle complete — ramp to RG/DVC target")
+            applyReplayGain(token, token.currentMediaItem, eqMain)
+        }
+        settleRunnable = settle
+        handler.postDelayed(settle, SESSION_SETTLE_MS)
     }
 
     /**
@@ -247,7 +400,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
      * Fallback (no DP): short smooth ramp of player volume — never a hard set.
      */
     private fun applyReplayGain(exo: ExoPlayer, item: MediaItem?, eq: EqController) {
-        if (fading) return
+        if (fading || sessionBindPending) return
         rgLinear = ReplayGainProcessor.fromExtras(
             item?.mediaMetadata?.extras,
             settings.replayGainMode,
@@ -255,7 +408,18 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         )
         val viaEffect = eq.applyReplayGainLinear(rgLinear, settings)
         if (viaEffect) {
-            setPlayerVolumeSmooth(exo, 1f)
+            // DVC path: keep AudioTrack volume at unity. Snap only when already near
+            // target so we never run a visible ramp that fights Poweramp.
+            volumeAnim?.cancel()
+            volumeAnim = null
+            if (abs(exo.volume - 1f) >= 0.01f) {
+                // After mute-until-bound, ramp up rather than hard snap from 0.
+                if (exo.volume < 0.05f) {
+                    setPlayerVolumeSmooth(exo, 1f)
+                } else {
+                    exo.volume = 1f
+                }
+            }
         } else {
             setPlayerVolumeSmooth(exo, replayGainToPlayerVolume(rgLinear))
         }
@@ -272,7 +436,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         volumeAnim = ValueAnimator.ofFloat(from, target).apply {
             duration = VOLUME_RAMP_MS
             addUpdateListener { a ->
-                if (!fading) exo.volume = a.animatedValue as Float
+                if (!fading && !sessionBindPending) exo.volume = a.animatedValue as Float
             }
             start()
         }
@@ -281,9 +445,6 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun notifyExternalEqSession(sessionId: Int, open: Boolean) {
         if (sessionId == 0) return
         if (open && sessionId == lastNotifiedSessionId) return
-        if (!open && sessionId != lastNotifiedSessionId && lastNotifiedSessionId != 0) {
-            // Already tracking a different session; still close the requested one.
-        }
         val action = if (open) {
             AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
         } else {
@@ -298,7 +459,14 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 },
             )
         }
-        lastNotifiedSessionId = if (open) sessionId else 0
+        Log.i(TAG, "${if (open) "OPEN" else "CLOSE"} audio effect session=$sessionId")
+        if (open) {
+            lastNotifiedSessionId = sessionId
+        } else if (sessionId == lastNotifiedSessionId) {
+            // Only clear when closing the session we currently advertise.
+            lastNotifiedSessionId = 0
+        }
+        // Closing a stale session while another is already open: keep lastNotified.
     }
 
     private fun maybeStartCrossfade() {
@@ -341,6 +509,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
      * Build/prepare the secondary player without taking audio focus and without playing.
      * Critical: [handleAudioFocus]=false so [play] later does not pause the outgoing
      * player (owner: hard cut / early stop instead of true overlap).
+     *
+     * Both players share [stickySessionId] — no second session from [buildPlayer].
      */
     private fun ensureNextPrepared(from: ExoPlayer, nextIndex: Int) {
         val existing = fadePlayer
@@ -349,6 +519,16 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
         val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
         val next = buildPlayer(handleAudioFocus = false)
+        // buildPlayer already set stickySessionId. Re-assert before prepare; if sticky
+        // generation failed, share primary session (Option A / #23 absorb).
+        val sharedSession = when {
+            stickySessionId != 0 -> stickySessionId
+            from.audioSessionId != 0 -> from.audioSessionId
+            else -> 0
+        }
+        if (sharedSession != 0 && next.audioSessionId != sharedSession) {
+            next.setAudioSessionId(sharedSession)
+        }
         fadePlayer = next
         pendingNextIndex = nextIndex
         pendingReady = false
@@ -358,8 +538,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             settings.peakLimiter,
         )
         applyDisconnectPolicy(next)
-        attachEq(next, eqFade)
-        eqFade.applyReplayGainLinear(pendingNextLinear, settings)
+        if (sharedSession != 0 && next.audioSessionId == sharedSession) {
+            // eqMain already owns DynamicsProcessing + OPEN broadcast on this session.
+            // Do not attach eqFade (#17 double-attach) or open a second external session.
+            eqFade.release()
+        } else {
+            // Fallback if session share failed (session still 0).
+            attachEq(next, eqFade, openExternal = false, muteUntilBound = false)
+            eqFade.applyReplayGainLinear(pendingNextLinear, settings)
+        }
         next.volume = 0f
         next.setMediaItems(items, nextIndex, 0L)
         next.addListener(object : Player.Listener {
@@ -385,13 +572,26 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         volumeAnim = null
 
         val nextLinear = pendingNextLinear
-        // Keep ReplayGain on DynamicsProcessing when available; crossfade envelopes are
-        // mix-only (0↔1). Multiplying RG into player volume again caused jumps and
-        // fought Poweramp DVC on the secondary session.
-        val nextViaEffect = eqFade.applyReplayGainLinear(nextLinear, settings)
-        eqMain.applyReplayGainLinear(rgLinear, settings)
-        val nextGain = if (nextViaEffect) 1f else replayGainToPlayerVolume(nextLinear)
-        val fromGain = from.volume.coerceIn(0.05f, 1f)
+        val sharedSession =
+            next.audioSessionId != 0 && next.audioSessionId == from.audioSessionId
+
+        val nextGain: Float
+        val fromGain: Float
+        if (sharedSession) {
+            // One DynamicsProcessing on the shared session cannot carry two different
+            // ReplayGain values. Park DP at unity and bake RG into the volume envelope
+            // for the overlap only; promote restores RG to DP and volume to 1f.
+            fromGain = replayGainToPlayerVolume(rgLinear)
+            nextGain = replayGainToPlayerVolume(nextLinear)
+            from.volume = fromGain
+            eqMain.applyReplayGainLinear(1f, settings)
+        } else {
+            // Separate-session fallback: keep RG on each player's effect; envelope is mix-only.
+            val nextViaEffect = eqFade.applyReplayGainLinear(nextLinear, settings)
+            eqMain.applyReplayGainLinear(rgLinear, settings)
+            nextGain = if (nextViaEffect) 1f else replayGainToPlayerVolume(nextLinear)
+            fromGain = from.volume.coerceIn(0.05f, 1f)
+        }
 
         from.pauseAtEndOfMediaItems = true
         // Secondary was built without audio focus — both players can be audible together.
@@ -417,25 +617,64 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     private fun finishCrossfade(from: ExoPlayer, next: ExoPlayer, nextLinear: Float) {
         if (!fading || player !== from || fadePlayer !== next) return
-        player = next
-        session?.player = next
         fadePlayer = null
         pendingReady = false
         pendingNextIndex = C.INDEX_UNSET
-        from.stop()
-        from.release()
-        // Promote secondary to focus owner now that it is the sole primary player.
-        next.setAudioAttributes(mediaAudioAttributes(), /* handleAudioFocus= */ true)
         rgLinear = nextLinear
         fading = false
         fadeAnim = null
+
+        // Point internal primary at next first so outgoing listeners ignore focus loss.
+        player = next
+
+        // Take audio focus on next WHILE from still holds it. Releasing from first
+        // abandoned focus, then setAudioAttributes re-requested it and Media3 briefly
+        // suppressed playback (title already switched → owner-visible ~1s pause).
+        next.setAudioAttributes(mediaAudioAttributes(), /* handleAudioFocus= */ true)
+
+        // Shared sticky session: eqMain already owns the live effects — do not release.
+        // Separate-session fallback: adopt eqFade without teardown+reattach on next.
+        promoteFadeEqToMain(next)
+
+        // Session / NP title switch only after focus + EQ handoff are done.
+        session?.player = next
         applyGapless(next)
         installPlayerListeners(next)
-        // Secondary owned eqFade for this audio session; release before eqMain
-        // re-attaches or both DynamicsProcessing instances fight on one session.
-        eqFade.release()
-        attachEq(next, eqMain)
+        // Restores RG onto DynamicsProcessing and returns exo.volume to 1f for DVC.
         applyReplayGain(next, next.currentMediaItem, eqMain)
+
+        // Retire outgoing off the critical path so AudioTrack teardown cannot glitch
+        // the already-audible next track in the same frame as the promote.
+        handler.post {
+            runCatching {
+                from.stop()
+                from.release()
+            }
+        }
+    }
+
+    /**
+     * Ensure eqMain owns platform effects for [next] without CLOSING/OPENING the
+     * external EQ session when the audio session was shared (DVC-safe).
+     */
+    private fun promoteFadeEqToMain(next: ExoPlayer) {
+        val prevMainSession = eqMain.audioSessionId
+        val nextSession = next.audioSessionId
+        if (nextSession != 0 && (nextSession == prevMainSession || nextSession == stickySessionId)) {
+            // Shared / sticky session path: keep eqMain's DynamicsProcessing + OPEN.
+            eqFade.release()
+            return
+        }
+        // Separate-session fallback: move eqFade's live effects onto eqMain (no recreate).
+        eqMain.release()
+        eqMain.adoptFrom(eqFade)
+        if (nextSession != 0) {
+            notifyExternalEqSession(nextSession, open = true)
+        }
+        if (prevMainSession != 0 && prevMainSession != nextSession && stickySessionId == 0) {
+            // Only CLOSE stale when we have no sticky lifetime session.
+            notifyExternalEqSession(prevMainSession, open = false)
+        }
     }
 
     private fun releasePendingFadePlayer() {
@@ -519,7 +758,10 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     }
 
     companion object {
+        private const val TAG = "Auralis/DvcSession"
         private const val VOLUME_RAMP_MS = 120L
+        /** Settle after OPEN before ramping volume (cold start / unexpected rebind). */
+        private const val SESSION_SETTLE_MS = 80L
         /** How far ahead of the fade window to prepare the next ExoPlayer. */
         private const val PREPARE_LEAD_MS = 8_000L
     }
