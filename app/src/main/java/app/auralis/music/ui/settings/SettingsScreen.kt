@@ -23,6 +23,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -70,6 +71,16 @@ fun SettingsScreen(
     var fadeMs by remember { mutableStateOf(playerPrefs.crossfadeMs.toFloat()) }
     var pauseDisc by remember { mutableStateOf(playerPrefs.pauseOnDisconnect) }
     var sleepMins by remember { mutableStateOf(playerPrefs.sleepTimerMinutes) }
+    // PlaybackService clears the timer on fire / seek / new queue; keep the radio in sync.
+    DisposableEffect(playerPrefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == null || key == PlayerSettings.SLEEP_MINUTES || key == PlayerSettings.SLEEP_DEADLINE) {
+                sleepMins = playerPrefs.sleepTimerMinutes
+            }
+        }
+        playerPrefs.register(listener)
+        onDispose { playerPrefs.unregister(listener) }
+    }
     var eqOn by remember { mutableStateOf(playerPrefs.eqEnabled) }
     var eqPreset by remember { mutableStateOf(playerPrefs.eqPreset) }
     var eqGains by remember { mutableStateOf(playerPrefs.eqGains.copyOf()) }
