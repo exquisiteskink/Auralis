@@ -53,19 +53,30 @@ class PlayerSettings(context: Context) {
         get() = prefs.getLong(SLEEP_DEADLINE, 0L)
         set(value) { prefs.edit().putLong(SLEEP_DEADLINE, value).apply() }
 
+    /**
+     * Wall-clock (`System.currentTimeMillis()`) deadline for minute-based timers.
+     * Survives reboot; [sleepDeadlineElapsed] alone does not (`elapsedRealtime` resets).
+     */
+    var sleepDeadlineWallMs: Long
+        get() = prefs.getLong(SLEEP_DEADLINE_WALL, 0L)
+        set(value) { prefs.edit().putLong(SLEEP_DEADLINE_WALL, value).apply() }
+
     fun clearSleepTimer() {
         prefs.edit()
             .putInt(SLEEP_MINUTES, 0)
             .putLong(SLEEP_DEADLINE, 0L)
+            .putLong(SLEEP_DEADLINE_WALL, 0L)
             .apply()
     }
 
     fun armSleepMinutes(minutes: Int) {
         require(minutes in SLEEP_MINUTE_OPTIONS)
-        val deadline = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
+        val elapsedDeadline = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
+        val wallDeadline = System.currentTimeMillis() + minutes * 60_000L
         prefs.edit()
             .putInt(SLEEP_MINUTES, minutes)
-            .putLong(SLEEP_DEADLINE, deadline)
+            .putLong(SLEEP_DEADLINE, elapsedDeadline)
+            .putLong(SLEEP_DEADLINE_WALL, wallDeadline)
             .apply()
     }
 
@@ -73,6 +84,7 @@ class PlayerSettings(context: Context) {
         prefs.edit()
             .putInt(SLEEP_MINUTES, SLEEP_END_OF_TRACK)
             .putLong(SLEEP_DEADLINE, 0L)
+            .putLong(SLEEP_DEADLINE_WALL, 0L)
             .apply()
     }
 
@@ -122,6 +134,7 @@ class PlayerSettings(context: Context) {
         const val PAUSE_DISC = "pause_disconnect"
         const val SLEEP_MINUTES = "sleep_minutes"
         const val SLEEP_DEADLINE = "sleep_deadline"
+        const val SLEEP_DEADLINE_WALL = "sleep_deadline_wall"
         const val SLEEP_END_OF_TRACK = -1
         val SLEEP_MINUTE_OPTIONS = setOf(15, 30, 45, 60)
 
