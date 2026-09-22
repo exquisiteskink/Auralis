@@ -4,6 +4,9 @@ import android.content.Context
 import app.auralis.music.data.auth.CredentialStore
 import app.auralis.music.data.auth.StoredCredentials
 import app.auralis.music.data.player.PlayerController
+import app.auralis.music.data.player.PlayerSettings
+import app.auralis.music.data.download.DownloadStore
+import app.auralis.music.data.download.OfflineDownloadManager
 import app.auralis.music.data.remote.MetadataRepository
 import app.auralis.music.data.remote.SubsonicClient
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +19,10 @@ class AppContainer(context: Context) {
     val credentials = CredentialStore(context)
     val client = SubsonicClient()
     val metadata = MetadataRepository(client)
-    val player = PlayerController(context.applicationContext, client)
+    val playerSettings = PlayerSettings(context.applicationContext)
+    val downloadStore = DownloadStore(context.applicationContext)
+    val downloads = OfflineDownloadManager(context.applicationContext, client, downloadStore, playerSettings)
+    val player = PlayerController(context.applicationContext, client, downloadStore)
 
     private val _loggedIn = MutableStateFlow(false)
     val loggedIn: StateFlow<Boolean> = _loggedIn
@@ -28,6 +34,17 @@ class AppContainer(context: Context) {
         val stored = credentials.load()
         if (stored == null) {
             restored = true
+            return@withLock
+        }
+        // Credentials were saved only after a successful login. Local playback must
+        // not depend on a fresh network round trip on every process launch.
+        val hasDownloads = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            downloadStore.availableSongs(downloadStore.serverKey(stored)).isNotEmpty()
+        }
+        if (hasDownloads) {
+            client.credentials = stored
+            restored = true
+            setLoggedIn(true)
             return@withLock
         }
         try {
@@ -47,6 +64,7 @@ class AppContainer(context: Context) {
     }
 
     suspend fun signIn(candidate: StoredCredentials) = loginMutex.withLock {
+        downloads.cancelAndJoin()
         try {
             val (accepted, _) = client.login(candidate)
             credentials.save(accepted)
@@ -59,6 +77,7 @@ class AppContainer(context: Context) {
     }
 
     fun signOut() {
+        downloads.cancel()
         player.stopAndReset()
         client.http.dispatcher.cancelAll()
         client.credentials = null

@@ -76,6 +76,11 @@ class PlayerSettings(context: Context) {
             .apply()
     }
 
+    /** When true, OpenSubsonic original/`download` offline fetches require unmetered Wi‑Fi. */
+    var wifiOnlyHiResDownloads: Boolean
+        get() = prefs.getBoolean(WIFI_ONLY_HIRES_DL, true)
+        set(value) { prefs.edit().putBoolean(WIFI_ONLY_HIRES_DL, value).apply() }
+
     var eqEnabled: Boolean
         get() = prefs.getBoolean(EQ_ON, false)
         set(value) { prefs.edit().putBoolean(EQ_ON, value).apply() }
@@ -119,6 +124,8 @@ class PlayerSettings(context: Context) {
         const val SLEEP_DEADLINE = "sleep_deadline"
         const val SLEEP_END_OF_TRACK = -1
         val SLEEP_MINUTE_OPTIONS = setOf(15, 30, 45, 60)
+
+        const val WIFI_ONLY_HIRES_DL = "wifi_only_hires_dl"
         const val EQ_ON = "eq_on"
         const val EQ_PRESET = "eq_preset"
         const val EQ_GAINS = "eq_gains"

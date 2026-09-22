@@ -247,11 +247,13 @@ private fun AuralisRoot(
                 composable("login") { LoginScreen() }
                 composable("home") {
                     HomeScreen(
+                        onDownloads = { nav.navigate("downloads") },
                         onPlaylist = { nav.navigate("playlist/${encode(it)}") },
                         onAlbum = { nav.navigate("album/${encode(it)}") },
                         onArtist = { nav.navigate("artist/${encode(it)}") },
                     )
                 }
+                composable("downloads") { app.auralis.music.ui.download.DownloadsScreen(onBack = { nav.popBackStack() }) }
                 composable("artists") { ArtistsScreen(onArtist = { nav.navigate("artist/${encode(it)}") }) }
                 composable("search") {
                     SearchScreen(
