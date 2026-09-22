@@ -4,19 +4,41 @@ import android.content.Context
 import android.net.Uri
 import java.io.File
 import java.io.InputStream
+import java.security.MessageDigest
+import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Client-only cover/artist image overrides.
  *
- * Layout: `filesDir/art_overrides/{album|artist}/<sanitizedId>.jpg`
+ * Layout: `filesDir/art_overrides/{album|artist}/<sha256Id>.jpg`
  *
  * - Never writes embedded tags or library files on the server
  * - Never calls Subsonic upload / invented setCoverArt APIs
  * - Does not touch PlayerSettings (sleep_timer / wifi_only_hires_dl keys)
  */
-class ArtOverrideStore(context: Context) {
-    private val appContext = context.applicationContext
-    private val root = File(appContext.filesDir, "art_overrides").apply { mkdirs() }
+class ArtOverrideStore internal constructor(
+    root: File,
+    private val openInputStream: (Uri) -> InputStream? = { error("No content resolver") },
+) {
+    constructor(context: Context) : this(
+        File(context.applicationContext.filesDir, "art_overrides"),
+        { uri -> context.applicationContext.contentResolver.openInputStream(uri) },
+    )
+
+    private val mutableRevisions = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val revisions = mutableRevisions.asStateFlow()
+    // Avoid reusing Coil entries left by an earlier store/process instance.
+    val cacheNamespace: String = UUID.randomUUID().toString()
+
+    fun albumRevisionKey(id: String): String = "album/${sanitizeId(id)}"
+
+    private fun changed(dir: File, id: String) {
+        val key = "${dir.name}/${sanitizeId(id)}"
+        val old = mutableRevisions.value
+        mutableRevisions.value = old + (key to ((old[key] ?: 0L) + 1L))
+    }
     private val albumDir = File(root, "album").apply { mkdirs() }
     private val artistDir = File(root, "artist").apply { mkdirs() }
 
@@ -43,11 +65,11 @@ class ArtOverrideStore(context: Context) {
     }
 
     fun clearAlbumOverride(albumId: String) {
-        fileFor(albumDir, albumId).delete()
+        clear(albumDir, albumId)
     }
 
     fun clearArtistOverride(artistId: String) {
-        fileFor(artistDir, artistId).delete()
+        clear(artistDir, artistId)
     }
 
     private fun uriIfExists(dir: File, id: String): Uri? {
@@ -55,21 +77,30 @@ class ArtOverrideStore(context: Context) {
         return if (f.isFile && f.length() > 0L) Uri.fromFile(f) else null
     }
 
+    @Synchronized
+    private fun clear(dir: File, id: String) {
+        val target = fileFor(dir, id)
+        check(!target.exists() || target.delete()) { "Cannot delete artwork" }
+        changed(dir, id)
+    }
+
+    @Synchronized
     private fun writeBytes(dir: File, id: String, bytes: ByteArray) {
         require(bytes.isNotEmpty()) { "empty image bytes" }
         val target = fileFor(dir, id)
-        val tmp = File(target.parentFile, target.name + ".tmp")
-        tmp.writeBytes(bytes)
-        if (!tmp.renameTo(target)) {
-            target.writeBytes(tmp.readBytes())
+        val tmp = File.createTempFile("override-", ".tmp", dir)
+        try {
+            tmp.writeBytes(bytes)
+            check(tmp.renameTo(target)) { "Cannot replace artwork" }
+            changed(dir, id)
+        } finally {
             tmp.delete()
         }
     }
 
     private fun writeUri(dir: File, id: String, uri: Uri) {
-        val resolver = appContext.contentResolver
-        resolver.openInputStream(uri).use { input ->
-            requireNotNull(input) { "cannot open $uri" }
+        openInputStream(uri).use { input ->
+            requireNotNull(input) { "cannot open image" }
             writeBytes(dir, id, input.readBytes())
         }
     }
@@ -79,9 +110,8 @@ class ArtOverrideStore(context: Context) {
 
     companion object {
         fun sanitizeId(id: String): String =
-            id.map { c -> if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_' }
-                .joinToString("")
-                .ifBlank { "unknown" }
+            MessageDigest.getInstance("SHA-256").digest(id.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
     }
 
     /** Brief API: album or artist override Uri, or null. */
