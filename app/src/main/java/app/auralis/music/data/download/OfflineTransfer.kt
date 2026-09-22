@@ -51,8 +51,16 @@ internal object OfflineTransfer {
                             }
                         }
                         val actual = tmp.length()
-                        if (actual == 0L || (body.contentLength() >= 0 && actual != body.contentLength()) ||
-                            (expectedSize > 0 && actual != expectedSize)) {
+                        val contentLen = body.contentLength()
+                        // Prefer HTTP Content-Length. Subsonic metadata `size` is often
+                        // wrong vs the original download body; requiring both rejects valid files.
+                        val incomplete = when {
+                            actual == 0L -> true
+                            contentLen >= 0L -> actual != contentLen
+                            expectedSize > 0L -> actual != expectedSize
+                            else -> false
+                        }
+                        if (incomplete) {
                             throw IOException("Incomplete download; retry this track")
                         }
                     }

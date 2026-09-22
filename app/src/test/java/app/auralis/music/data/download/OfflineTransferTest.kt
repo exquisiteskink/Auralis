@@ -73,7 +73,6 @@ class OfflineTransferTest {
                 "audio/mpeg" to "<html>Proxy error</html>",
                 "application/json" to "{\"error\":1}",
                 "application/octet-stream" to "not audio",
-                "audio/mpeg" to audio,
             )
             for ((type, body) in cases) {
                 server.enqueue(MockResponse().setHeader("Content-Type", type).setBody(body))
@@ -87,6 +86,42 @@ class OfflineTransferTest {
                 assertFalse(target.exists())
                 assertEquals(0, target.parentFile!!.listFiles()!!.size)
             }
+            // No Content-Length: metadata size must still catch a mismatched body.
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "audio/mpeg")
+                    .setChunkedBody(audio, 128),
+            )
+            val shortTarget = temp.newFolder().resolve("short.mp3")
+            try {
+                OfflineTransfer.download(
+                    http.newCall(Request.Builder().url(server.url("/")).build()),
+                    shortTarget,
+                    9999,
+                ) { fail("Mismatched metadata size must not be indexed") }
+                fail("Short download accepted")
+            } catch (_: IOException) { }
+            assertFalse(shortTarget.exists())
+        }
+    }
+
+    @Test fun acceptsAudioWhenContentLengthMatchesDespiteWrongMetadataSize() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "audio/mpeg")
+                    .setBody(audio),
+            )
+            server.start()
+            val target = temp.newFolder().resolve("ok.mp3")
+            val committed = CompletableDeferred<Unit>()
+            OfflineTransfer.download(
+                http.newCall(Request.Builder().url(server.url("/")).build()),
+                target,
+                expectedSize = 9999,
+            ) { committed.complete(Unit) }
+            withTimeout(5000) { committed.await() }
+            assertEquals(audio, target.readText())
         }
     }
 
