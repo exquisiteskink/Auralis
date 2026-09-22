@@ -431,6 +431,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         fadeAnim = null
         applyGapless(next)
         installPlayerListeners(next)
+        // Secondary owned eqFade for this audio session; release before eqMain
+        // re-attaches or both DynamicsProcessing instances fight on one session.
+        eqFade.release()
         attachEq(next, eqMain)
         applyReplayGain(next, next.currentMediaItem, eqMain)
     }
