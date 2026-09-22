@@ -86,6 +86,7 @@ import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.AuralisMotion
 import app.auralis.music.ui.theme.LocalPalette
+import app.auralis.music.ui.theme.LocalContainer
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.ui.theme.UltraBlurBackground
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -341,6 +342,7 @@ private fun NowPlayingPage(
             }
 
             // Breathing room under art, then seek — Plexamp-like stack.
+            val peaks = rememberWaveformPeaks(song, LocalContainer.current.waveforms)
             Spacer(Modifier.height(20.dp))
             Row(
                 Modifier.fillMaxWidth(),
@@ -356,7 +358,7 @@ private fun NowPlayingPage(
                 WaveformSeekBar(
                     positionMs = positionMs,
                     durationMs = ui.durationMs,
-                    seed = song.id,
+                    peaks = peaks,
                     onSeek = { ms -> player.seek(ms) },
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )

@@ -9,6 +9,7 @@ import app.auralis.music.data.download.DownloadStore
 import app.auralis.music.data.download.OfflineDownloadManager
 import app.auralis.music.data.remote.MetadataRepository
 import app.auralis.music.data.remote.SubsonicClient
+import app.auralis.music.data.waveform.WaveformRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -22,6 +23,7 @@ class AppContainer(context: Context) {
     val playerSettings = PlayerSettings(context.applicationContext)
     val downloadStore = DownloadStore(context.applicationContext)
     val downloads = OfflineDownloadManager(context.applicationContext, client, downloadStore, playerSettings)
+    val waveforms = WaveformRepository(context.applicationContext, client, downloadStore)
     val player = PlayerController(context.applicationContext, client, downloadStore)
 
     private val _loggedIn = MutableStateFlow(false)
