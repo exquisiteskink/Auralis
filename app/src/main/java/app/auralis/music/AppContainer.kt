@@ -50,17 +50,21 @@ class AppContainer(context: Context) {
         try {
             val (accepted, _) = client.login(stored)
             credentials.save(accepted)
+            restored = true
             setLoggedIn(true)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (e is app.auralis.music.data.remote.SubsonicException && e.code in listOf(40, 41, 42, 43, 44)) {
-                credentials.clear()
-            }
             client.credentials = null
             setLoggedIn(false)
+            if (e is app.auralis.music.data.remote.SubsonicException && e.code in listOf(40, 41, 42, 43, 44)) {
+                // Permanent auth failure — forget the saved session.
+                credentials.clear()
+                restored = true
+            }
+            // Transient network/server errors: keep the encrypted store and leave
+            // restored=false so Login / Android Auto can retry restoreSession().
         }
-        restored = true
     }
 
     suspend fun signIn(candidate: StoredCredentials) = loginMutex.withLock {
