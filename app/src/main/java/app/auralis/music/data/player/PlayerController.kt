@@ -330,7 +330,6 @@ class PlayerController(
         }
         if (controller == null) connect()
         else {
-            syncFromPlayer()
             songs.getOrNull(idx)?.let {
                 refreshArtwork(it)
                 refreshLyrics(it)

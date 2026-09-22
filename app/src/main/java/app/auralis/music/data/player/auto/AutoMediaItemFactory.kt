@@ -16,6 +16,7 @@ import app.auralis.music.data.remote.SubsonicClient
  */
 class AutoMediaItemFactory(
     private val client: SubsonicClient,
+    private val bitrate: () -> Int,
 ) {
     fun root(): MediaItem = folder(
         mediaId = AutoBrowseIds.ROOT,
@@ -61,7 +62,7 @@ class AutoMediaItemFactory(
         isPlayable = true,
     )
 
-    fun song(song: Song, parentId: String?): MediaItem {
+    fun song(song: Song, parentId: String, index: Int): MediaItem {
         val art = client.coverUrl(song.coverArt, 800)
         val extras = Bundle().apply {
             putString("app_name", "Auralis")
@@ -74,8 +75,8 @@ class AutoMediaItemFactory(
             song.replayGain?.fallbackGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_FALLBACK, it) }
         }
         return MediaItem.Builder()
-            .setMediaId(AutoBrowseIds.song(song.id))
-            .setUri(client.streamUrl(song.id, 0))
+            .setMediaId(AutoBrowseIds.song(song.id, parentId, index))
+            .setUri(client.streamUrl(song.id, bitrate()))
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(song.title.ifBlank { "Track" })
@@ -95,8 +96,8 @@ class AutoMediaItemFactory(
     }
 
     /** Playable MediaItem list matching phone [PlayerController] stream path. */
-    fun playableSongs(songs: List<Song>, parentId: String?): List<MediaItem> =
-        songs.map { song(it, parentId) }
+    fun playableSongs(songs: List<Song>, parentId: String): List<MediaItem> =
+        songs.mapIndexed { index, song -> song(song, parentId, index) }
 
     private fun folder(
         mediaId: String,
