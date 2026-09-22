@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -250,41 +251,75 @@ class PlayerController(
 
     /**
      * Recover from a sticky playback error without force-stopping the app.
-     * Rebuilds stream MediaItems (fresh auth query params) and prepares at the last position.
+     * Same energy as playing a new album: rebuild stream MediaItems (fresh salt/token
+     * query params) + prepare/play on the **current queue** — no force-stop required.
      * Does not recreate the MediaSession / sticky audio session — service owns those.
      */
     fun retryPlayback() {
         val st = _state.value
         if (st.queue.isEmpty()) return
-        _state.update { it.copy(playbackError = "Retrying…", isPlaying = false) }
         val c = controller
-        if (c == null) {
-            setQueue(st.queue, st.index, autoPlay = true, positionMs = st.positionMs)
-            return
-        }
-        val idx = c.currentMediaItemIndex.coerceIn(0, st.queue.lastIndex)
+        val idx = (c?.currentMediaItemIndex ?: st.index).coerceIn(0, st.queue.lastIndex)
         val pos = when {
-            c.currentPosition > 0L -> c.currentPosition
+            c != null && c.currentPosition > 0L -> c.currentPosition
             st.positionMs > 0L -> st.positionMs
             else -> 0L
         }
+        reprepareFromQueue(idx, pos, autoPlay = true, status = "Retrying…")
+    }
+
+    /**
+     * Rebuild every MediaItem URI from song id + current credentials and prepare.
+     * This is the path that recovers when "play a new album" works but the same
+     * queue is stuck after ERROR_CODE_IO_NETWORK_CONNECTION_*.
+     */
+    private fun reprepareFromQueue(
+        index: Int,
+        positionMs: Long,
+        autoPlay: Boolean,
+        status: String? = null,
+    ) {
+        val st = _state.value
+        if (st.queue.isEmpty()) return
+        if (client.credentials == null) return
+        val idx = index.coerceIn(0, st.queue.lastIndex)
+        val pos = positionMs.coerceAtLeast(0L)
+        _state.update {
+            it.copy(
+                playbackError = status,
+                isPlaying = false,
+                index = idx,
+                positionMs = pos,
+            )
+        }
+        val c = controller
+        if (c == null) {
+            setQueue(st.queue, idx, autoPlay = autoPlay, positionMs = pos)
+            return
+        }
         runCatching {
+            c.playWhenReady = autoPlay
             c.setMediaItems(st.queue.map { it.toMediaItem() }, idx, pos)
             c.prepare()
-            c.play()
+            if (autoPlay) c.play()
+            if (status != null) {
+                _state.update { s -> s.copy(playbackError = null) }
+            }
         }.onFailure {
             _state.update { s -> s.copy(playbackError = "Connection error", isPlaying = false) }
         }
     }
 
+    private fun hasStickyPlaybackError(c: Player): Boolean =
+        c.playerError != null || _state.value.playbackError != null
+
     fun next() {
         val c = controller ?: return
-        if (c.playerError != null || _state.value.playbackError != null) {
-            if (c.hasNextMediaItem()) {
-                _state.update { it.copy(playbackError = null) }
-                c.seekToNextMediaItem()
-                if (c.playbackState == Player.STATE_IDLE) c.prepare()
-                c.play()
+        if (hasStickyPlaybackError(c)) {
+            val nextIdx = c.nextMediaItemIndex
+            if (nextIdx != C.INDEX_UNSET && nextIdx in _state.value.queue.indices) {
+                // Skip must rebuild URIs — seek+prepare alone leaves the sticky error trap.
+                reprepareFromQueue(nextIdx, 0L, autoPlay = true)
             } else {
                 retryPlayback()
             }
@@ -295,12 +330,10 @@ class PlayerController(
 
     fun previous() {
         val c = controller ?: return
-        if (c.playerError != null || _state.value.playbackError != null) {
-            if (c.hasPreviousMediaItem()) {
-                _state.update { it.copy(playbackError = null) }
-                c.seekToPreviousMediaItem()
-                if (c.playbackState == Player.STATE_IDLE) c.prepare()
-                c.play()
+        if (hasStickyPlaybackError(c)) {
+            val prevIdx = c.previousMediaItemIndex
+            if (prevIdx != C.INDEX_UNSET && prevIdx in _state.value.queue.indices) {
+                reprepareFromQueue(prevIdx, 0L, autoPlay = true)
             } else {
                 retryPlayback()
             }
@@ -351,8 +384,13 @@ class PlayerController(
 
     fun playFromQueue(index: Int) {
         if (index !in _state.value.queue.indices) return
-        controller?.seekToDefaultPosition(index)
-        controller?.play()
+        val c = controller
+        if (c == null || hasStickyPlaybackError(c)) {
+            reprepareFromQueue(index, 0L, autoPlay = true)
+            return
+        }
+        c.seekToDefaultPosition(index)
+        c.play()
     }
 
     fun toggleRepeat() {
@@ -519,6 +557,11 @@ class PlayerController(
             syncFromPlayer(preserveRestoredState = pendingRestoredPlayback != null)
             scrobbledId = null
             listenedMs = 0
+            // Rebuild upcoming stream URIs (fresh salt) so track N+1 is not the
+            // enqueue-time URL — mirrors new-album recovery without waiting for error.
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                refreshUpcomingStreamUris()
+            }
             val song = _state.value.current
             if (song != null) {
                 scope.launch { client.scrobble(song.id, submission = false) }
@@ -715,6 +758,21 @@ class PlayerController(
             repeatMode = c?.repeatMode ?: st.repeatMode,
         )
         queueWriter.submit(snap)
+    }
+
+    /**
+     * Replace upcoming (not current) MediaItems with freshly built stream URLs.
+     * Current item is left alone to avoid interrupting playback.
+     */
+    private fun refreshUpcomingStreamUris() {
+        val c = controller ?: return
+        val st = _state.value
+        if (st.queue.isEmpty() || client.credentials == null) return
+        if (c.mediaItemCount == 0) return
+        val current = c.currentMediaItemIndex.coerceAtLeast(0)
+        for (i in (current + 1) until minOf(st.queue.size, c.mediaItemCount)) {
+            runCatching { c.replaceMediaItem(i, st.queue[i].toMediaItem()) }
+        }
     }
 
     private fun Song.toMediaItem(): MediaItem {

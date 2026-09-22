@@ -17,6 +17,8 @@ internal object PlaybackErrors {
             PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
             -> return true
         }
+        // Media3 names are ERROR_CODE_IO_NETWORK_CONNECTION_*; UI may truncate.
+        if (error.errorCodeName.contains("IO_NETWORK_CONNECTION")) return true
         var cause: Throwable? = error.cause
         while (cause != null) {
             val name = cause.javaClass.name
@@ -36,12 +38,12 @@ internal object PlaybackErrors {
     }
 
     /** Short label for mini / NP subtitle (not the raw ERROR_CODE_* name). */
-    fun userMessage(error: PlaybackException): String = when (error.errorCode) {
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-        -> "Connection error"
-        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server error"
-        PlaybackException.ERROR_CODE_TIMEOUT -> "Playback timed out"
+    fun userMessage(error: PlaybackException): String = when {
+        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            error.errorCodeName.contains("IO_NETWORK_CONNECTION") -> "Connection error"
+        error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server error"
+        error.errorCode == PlaybackException.ERROR_CODE_TIMEOUT -> "Playback timed out"
         else -> if (isTransient(error)) "Connection error" else "Playback error"
     }
 }

@@ -251,14 +251,37 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             val pos = exo.currentPosition.coerceAtLeast(0L)
             Log.i(TAG, "auto-retry prepare idx=$idx pos=$pos play=$play")
             runCatching {
-                // prepare() alone recovers IDLE-after-error without a seek discontinuity
-                // (seek would falsely cancel sleep timer / crossfade guards).
+                // Refresh stream URI (fresh salt) then prepare — same recovery energy as
+                // playing a new album / PlayerController.reprepareFromQueue, without
+                // rebuilding ExoPlayer or touching sticky audioSessionId.
+                val item = exo.getMediaItemAt(idx)
+                val fresh = refreshMediaItemStreamUri(item)
+                if (fresh.localConfiguration?.uri != item.localConfiguration?.uri) {
+                    exo.replaceMediaItem(idx, fresh)
+                    exo.seekTo(idx, pos)
+                }
                 exo.prepare()
                 if (play) exo.play()
             }.onFailure { Log.w(TAG, "auto-retry prepare failed", it) }
         }
         errorRetryRunnable = r
         handler.postDelayed(r, delayMs)
+    }
+
+    /**
+     * Rebuild remote stream URI from mediaId + current credentials.
+     * Local/offline URIs are left unchanged. Does not touch audio session / EQ.
+     */
+    private fun refreshMediaItemStreamUri(item: MediaItem): MediaItem {
+        val id = item.mediaId
+        if (id.isNullOrBlank()) return item
+        val uri = item.localConfiguration?.uri ?: return item
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "file" || scheme == "content") return item
+        val client = (application as AuralisApp).container.client
+        if (client.credentials == null) return item
+        val maxBr = uri.getQueryParameter("maxBitRate")?.toIntOrNull() ?: 0
+        return item.buildUpon().setUri(client.streamUrl(id, maxBr)).build()
     }
 
     private fun cancelErrorRetryCallback() {
@@ -601,7 +624,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         if (existing != null && pendingNextIndex == nextIndex) return
         releasePendingFadePlayer()
 
-        val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
+        // Refresh stream URIs before CF prepare so the next track is not an
+        // enqueue-time URL (owner: dies after ~2 songs; new album recovers).
+        val items = (0 until from.mediaItemCount).map { refreshMediaItemStreamUri(from.getMediaItemAt(it)) }
         val next = buildPlayer(handleAudioFocus = false)
         // buildPlayer already set stickySessionId. Re-assert before prepare; if sticky
         // generation failed, share primary session (Option A / #23 absorb).

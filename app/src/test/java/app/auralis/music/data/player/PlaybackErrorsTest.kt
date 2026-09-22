@@ -59,4 +59,16 @@ class PlaybackErrorsTest {
         )
         assertTrue(PlaybackErrors.isTransient(err))
     }
+
+    @Test
+    fun errorCodeNameContainingNetworkConnectionIsTransient() {
+        val err = PlaybackException(
+            "net",
+            null,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        )
+        assertTrue(err.errorCodeName.contains("IO_NETWORK_CONNECTION"))
+        assertTrue(PlaybackErrors.isTransient(err))
+        assertEquals("Connection error", PlaybackErrors.userMessage(err))
+    }
 }
