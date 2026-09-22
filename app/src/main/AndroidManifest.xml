@@ -9,6 +9,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Package visibility (API 30+): allow detecting external EQs for Option B
+         dual-player crossfade gate. Without this, getPackageInfo always misses. -->
+    <queries>
+        <package android:name="com.maxmpz.equalizer" />
+        <package android:name="com.pittvandewitt.wavelet" />
+        <package android:name="com.mistersomov.wavelet" />
+        <intent>
+            <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+        </intent>
+    </queries>
+
     <!-- Browse-only MVP: voice/search intents are intentionally not advertised. -->
     <application
         tools:ignore="MissingIntentFilterForMediaSearch"
