@@ -4,17 +4,23 @@ import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.os.Build
 import androidx.annotation.RequiresApi
+import kotlin.math.abs
 import kotlin.math.log10
-import kotlin.math.pow
 
 /**
  * 10-band EQ attached to an ExoPlayer audio session.
  * Uses DynamicsProcessing on API 28+; otherwise the platform Equalizer.
+ *
+ * ReplayGain is applied as DynamicsProcessing input gain (dB) when available so
+ * [androidx.media3.common.Player.setVolume] can stay at 1f — critical for external
+ * equalizers that use Direct Volume Control (e.g. Poweramp EQ DVC).
  */
 class EqController {
     private var dynamics: DynamicsProcessing? = null
     private var equalizer: Equalizer? = null
     private var sessionId = 0
+    /** Last ReplayGain applied via platform effect, in dB (0 = unity). */
+    private var replayGainDb = 0f
 
     fun attach(audioSessionId: Int, settings: PlayerSettings) {
         if (audioSessionId == 0 || audioSessionId == sessionId) {
@@ -36,13 +42,32 @@ class EqController {
                     0,
                     false,
                 ).build()
-                DynamicsProcessing(0, audioSessionId, cfg).apply { enabled = settings.eqEnabled }
+                DynamicsProcessing(0, audioSessionId, cfg).apply {
+                    enabled = settings.eqEnabled || abs(replayGainDb) > RG_DB_EPS
+                }
             }.getOrNull()
         }
         if (dynamics == null) {
             equalizer = runCatching { Equalizer(0, audioSessionId) }.getOrNull()
         }
         apply(settings)
+    }
+
+    /**
+     * Apply ReplayGain as platform-effect input gain when DynamicsProcessing is active.
+     * @return true if gain was applied via the effect (caller should keep player volume at 1f).
+     */
+    fun applyReplayGainLinear(linear: Float, settings: PlayerSettings): Boolean {
+        replayGainDb = linearToDb(linear)
+        val dp = dynamics
+        if (dp != null && Build.VERSION.SDK_INT >= 28) {
+            val ok = runCatching {
+                applyDynamics(dp, settings.eqGains, settings.eqEnabled)
+                true
+            }.getOrDefault(false)
+            if (ok) return true
+        }
+        return false
     }
 
     fun apply(settings: PlayerSettings) {
@@ -70,10 +95,28 @@ class EqController {
     }
 
     @RequiresApi(28)
-    private fun applyDynamics(dp: DynamicsProcessing, gains: FloatArray, on: Boolean) {
+    private fun applyDynamics(dp: DynamicsProcessing, gains: FloatArray, eqOn: Boolean) {
         runCatching {
-            dp.enabled = on
-            if (!on) return
+            val rgActive = abs(replayGainDb) > RG_DB_EPS
+            // Keep the effect enabled for RG-only so we never need to snap ExoPlayer volume.
+            // When both EQ and RG are idle, disable so external EQs (Poweramp) own the session.
+            dp.enabled = eqOn || rgActive
+            dp.setInputGainAllChannelsTo(replayGainDb.coerceIn(RG_DB_MIN, RG_DB_MAX))
+            if (!eqOn) {
+                if (rgActive) {
+                    // Flat pre-EQ while effect stays on for input gain only.
+                    val pre = dp.getPreEqByChannelIndex(0)
+                    val n = pre.bandCount.coerceAtMost(10)
+                    for (i in 0 until n) {
+                        val band = pre.getBand(i)
+                        band.isEnabled = true
+                        band.cutoffFrequency = EqPresets.BANDS_HZ[i].toFloat()
+                        band.gain = 0f
+                        dp.setPreEqBandAllChannelsTo(i, band)
+                    }
+                }
+                return
+            }
             val pre = dp.getPreEqByChannelIndex(0)
             val n = pre.bandCount.coerceAtMost(10)
             for (i in 0 until n) {
@@ -92,7 +135,10 @@ class EqController {
         dynamics = null
         equalizer = null
         sessionId = 0
+        // Keep replayGainDb so a re-attach restores the same gain.
     }
+
+    val audioSessionId: Int get() = sessionId
 
     private fun interpolate(freqHz: Float, gains: FloatArray): Float {
         val hz = EqPresets.BANDS_HZ
@@ -106,6 +152,17 @@ class EqController {
             }
         }
         return 0f
+    }
+
+    companion object {
+        private const val RG_DB_EPS = 0.05f
+        private const val RG_DB_MIN = -30f
+        private const val RG_DB_MAX = 12f
+
+        fun linearToDb(linear: Float): Float {
+            if (!linear.isFinite() || linear <= 0f) return RG_DB_MIN
+            return (20.0 * log10(linear.toDouble())).toFloat().coerceIn(RG_DB_MIN, RG_DB_MAX)
+        }
     }
 }
 
