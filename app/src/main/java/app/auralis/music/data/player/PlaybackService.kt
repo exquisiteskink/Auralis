@@ -156,7 +156,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 applyGapless(exo)
             }
             PlayerSettings.PAUSE_DISC -> applyDisconnectPolicy(exo)
-            PlayerSettings.SLEEP_MINUTES, PlayerSettings.SLEEP_DEADLINE, PlayerSettings.SLEEP_DEADLINE_WALL -> armSleepTimerFromSettings()
+            PlayerSettings.SLEEP_MINUTES,
+            PlayerSettings.SLEEP_DEADLINE,
+            PlayerSettings.SLEEP_DEADLINE_WALL,
+            PlayerSettings.SLEEP_DEADLINE_BOOT_COUNT,
+            -> armSleepTimerFromSettings()
         }
     }
 
@@ -376,15 +380,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 // ExoPlayer pauses at the item boundary, including repeat, without polling.
             }
             else -> {
-                // Prefer wall-clock deadline so reboot / process death cannot leave a
-                // stale elapsedRealtime deadline that never fires (or fires instantly).
-                val wall = settings.sleepDeadlineWallMs
-                val elapsedDeadline = settings.sleepDeadlineElapsed
-                val delay = when {
-                    wall > 0L -> wall - System.currentTimeMillis()
-                    elapsedDeadline > 0L -> elapsedDeadline - SystemClock.elapsedRealtime()
-                    else -> minutes * 60_000L
-                }
+                val delay = SleepTimerDeadline.remainingDelayMs(
+                    savedBootCount = settings.sleepDeadlineBootCount,
+                    currentBootCount = settings.currentBootCount,
+                    elapsedDeadlineMs = settings.sleepDeadlineElapsed,
+                    wallDeadlineMs = settings.sleepDeadlineWallMs,
+                    elapsedNowMs = SystemClock.elapsedRealtime(),
+                    wallNowMs = System.currentTimeMillis(),
+                    fallbackDurationMs = minutes * 60_000L,
+                )
                 if (delay <= 0L) {
                     onSleepTimerFired()
                 } else {
