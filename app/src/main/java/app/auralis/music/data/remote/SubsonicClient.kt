@@ -225,8 +225,8 @@ class SubsonicClient(
      * OpenSubsonic / Subsonic [download](https://opensubsonic.netlify.app/docs/endpoints/download/)
      * URL for the original media file. Same auth as [streamUrl]. Do not persist — query may contain credentials.
      */
-    fun downloadUrl(songId: String): String {
-        return buildUrl("download", mapOf("id" to songId), session = true).toString()
+    fun downloadUrl(songId: String, creds: StoredCredentials = credentials ?: throw SubsonicException(40, "Not signed in")): String {
+        return buildUrl("download", mapOf("id" to songId), session = true, creds = creds).toString()
     }
 
     private suspend fun get(endpoint: String, vararg params: Pair<String, String>): SubsonicEnvelope =

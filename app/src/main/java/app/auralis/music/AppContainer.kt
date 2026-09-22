@@ -36,6 +36,17 @@ class AppContainer(context: Context) {
             restored = true
             return@withLock
         }
+        // Credentials were saved only after a successful login. Local playback must
+        // not depend on a fresh network round trip on every process launch.
+        val hasDownloads = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            downloadStore.availableSongs(downloadStore.serverKey(stored)).isNotEmpty()
+        }
+        if (hasDownloads) {
+            client.credentials = stored
+            restored = true
+            setLoggedIn(true)
+            return@withLock
+        }
         try {
             val (accepted, _) = client.login(stored)
             credentials.save(accepted)
@@ -53,6 +64,7 @@ class AppContainer(context: Context) {
     }
 
     suspend fun signIn(candidate: StoredCredentials) = loginMutex.withLock {
+        downloads.cancelAndJoin()
         try {
             val (accepted, _) = client.login(candidate)
             credentials.save(accepted)
@@ -65,6 +77,7 @@ class AppContainer(context: Context) {
     }
 
     fun signOut() {
+        downloads.cancel()
         player.stopAndReset()
         client.http.dispatcher.cancelAll()
         client.credentials = null

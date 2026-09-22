@@ -15,6 +15,7 @@ data class OfflineSongRecord(
     val album: String? = null,
     val albumId: String? = null,
     val downloadedAtMs: Long = 0L,
+    val song: app.auralis.music.data.remote.Song? = null,
 )
 
 @Serializable

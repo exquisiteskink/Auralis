@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
+    onDownloads: () -> Unit,
     onPlaylist: (String) -> Unit,
     onAlbum: (String) -> Unit,
     onArtist: (String) -> Unit,
@@ -162,6 +163,10 @@ fun HomeScreen(
             )
             if (error != null && playlists.isEmpty() && recent.isEmpty()) {
                 ErrorText(error ?: "Could not load library")
+            }
+
+            androidx.compose.material3.TextButton(onClick = onDownloads) {
+                Text("Downloads — listen offline", color = p.onBackground)
             }
 
             // 1. Your playlists — large cards; no “For you”

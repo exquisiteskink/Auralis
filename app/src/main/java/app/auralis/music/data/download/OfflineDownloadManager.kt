@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
+import app.auralis.music.data.auth.StoredCredentials
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -31,7 +33,7 @@ class OfflineDownloadManager(
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var job: Job? = null
+    private val work = DownloadWorkQueue(scope)
 
     private val _state = MutableStateFlow(DownloadUiState())
     val state: StateFlow<DownloadUiState> = _state
@@ -65,7 +67,8 @@ class OfflineDownloadManager(
 
     fun enqueue(songs: List<Song>, collectionLabel: String? = null, collectionId: String? = null) {
         if (songs.isEmpty()) return
-        if (client.credentials == null) {
+        val creds = client.credentials
+        if (creds == null) {
             _state.update {
                 it.copy(phase = DownloadPhase.Failed, message = "Not signed in")
             }
@@ -83,32 +86,30 @@ class OfflineDownloadManager(
             }
             return
         }
-        job?.cancel()
-        job = scope.launch {
-            runBatch(songs, collectionLabel)
+        work.replace {
+            if (client.credentials != creds) return@replace
+            runBatch(songs.toList(), collectionLabel, creds)
         }
     }
 
-    fun cancel() {
-        job?.cancel()
-        job = null
-        _state.update {
-            it.copy(phase = DownloadPhase.Idle, currentTitle = null, message = "Cancelled")
-        }
+    fun cancel() = work.stop {
+        _state.value = DownloadUiState(message = "Cancelled")
     }
+
+    suspend fun cancelAndJoin() { cancel().join() }
 
     fun clearDownloads() {
-        cancel()
         val creds = client.credentials
-        if (creds != null) store.clearAll(store.serverKey(creds))
-        else store.clearEverything()
-        _state.update {
-            DownloadUiState(phase = DownloadPhase.Idle, message = "Offline downloads cleared", bytesUsed = 0L)
+        work.stop {
+            withContext(Dispatchers.IO) {
+                if (creds != null) store.clearAll(store.serverKey(creds))
+                else store.clearEverything()
+            }
+            _state.value = DownloadUiState(message = "Offline downloads cleared")
         }
     }
 
-    private suspend fun runBatch(songs: List<Song>, collectionLabel: String?) {
-        val creds = client.credentials ?: return
+    private suspend fun runBatch(songs: List<Song>, collectionLabel: String?, creds: StoredCredentials) {
         val key = store.serverKey(creds)
         val pending = songs.filter { !store.hasSong(key, it.id) }
         if (pending.isEmpty()) {
@@ -138,7 +139,8 @@ class OfflineDownloadManager(
         }
         var done = 0
         for (song in pending) {
-            ensureActive()
+            currentCoroutineContext().ensureActive()
+            if (client.credentials != creds) return
             if (!WifiGate.allowHiResDownload(appContext, settings.wifiOnlyHiResDownloads)) {
                 _state.update {
                     it.copy(
@@ -153,7 +155,7 @@ class OfflineDownloadManager(
             }
             _state.update { it.copy(currentTitle = song.title, phase = DownloadPhase.Running) }
             try {
-                downloadOne(key, song)
+                downloadOne(key, song, creds)
                 done++
                 _state.update {
                     it.copy(done = done, bytesUsed = store.bytesUsed(key))
@@ -164,7 +166,7 @@ class OfflineDownloadManager(
                 _state.update {
                     it.copy(
                         phase = DownloadPhase.Failed,
-                        message = e.message ?: "Download failed",
+                        message = "Download failed; check the connection and retry",
                         done = done,
                         currentTitle = song.title,
                         bytesUsed = store.bytesUsed(key),
@@ -185,48 +187,11 @@ class OfflineDownloadManager(
         }
     }
 
-    private suspend fun downloadOne(key: String, song: Song) = withContext(Dispatchers.IO) {
-        // URL exists only for this request — never written to index or log files.
-        val url = client.downloadUrl(song.id)
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .header("Accept", "*/*")
-            .build()
-        val target = store.targetFile(key, song)
-        val tmp = File(target.parentFile, target.name + ".part")
-        client.http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw SubsonicException(0, "HTTP ${response.code}")
-            }
-            val body = response.body ?: throw IOException("Empty download body")
-            val contentType = body.contentType()?.toString().orEmpty()
-            body.byteStream().use { input ->
-                val buffered = input.buffered()
-                buffered.mark(64)
-                val head = ByteArray(32)
-                val n = buffered.read(head)
-                buffered.reset()
-                val headText = if (n > 0) head.copyOf(n).toString(Charsets.UTF_8).trimStart() else ""
-                if (contentType.contains("json", ignoreCase = true) || headText.startsWith("{")) {
-                    val peek = buffered.readBytes().toString(Charsets.UTF_8).take(500)
-                    throw SubsonicException(0, "Server refused download: ${peek.take(120)}")
-                }
-                tmp.outputStream().use { out -> buffered.copyTo(out) }
-            }
+    private suspend fun downloadOne(key: String, song: Song, creds: StoredCredentials) {
+        val request = Request.Builder().url(client.downloadUrl(song.id, creds)).get().build()
+        OfflineTransfer.download(client.http.newCall(request), store.targetFile(key, song), song.size) { file ->
+            check(client.credentials == creds) { "Account changed" }
+            store.markDownloaded(key, song, file)
         }
-        if (tmp.length() <= 0L) {
-            tmp.delete()
-            throw IOException("Downloaded file was empty")
-        }
-        if (song.size > 0 && tmp.length() < song.size / 2) {
-            // Soft check only — some servers omit Content-Length / report wrong size.
-        }
-        if (target.exists()) target.delete()
-        if (!tmp.renameTo(target)) {
-            tmp.copyTo(target, overwrite = true)
-            tmp.delete()
-        }
-        store.markDownloaded(key, song, target)
     }
 }
