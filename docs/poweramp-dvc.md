@@ -1,6 +1,6 @@
 # Poweramp EQ DVC — Auralis sticky audio session
 
-**Status:** Option A implemented (`fix/sticky-audio-session`).  
+**Status:** Option A implemented in 1.3.2.
 **Constraint:** EQ / ReplayGain stay on platform `DynamicsProcessing` (not ExoPlayer `AudioSink`). AutoEq untouched.
 
 ## What DVC is
@@ -34,5 +34,3 @@ Logcat filter: `Auralis/DvcSession`.
 | #10 | RG via DynamicsProcessing; exo.volume≈1f; OPEN/CLOSE | Dual-session on crossfade; CLOSE-then-OPEN window |
 | #23 | Share primary session on CF; promote order; OPEN-before-CLOSE | No service-lifetime sticky; skip without CF still churned; no cold-start mute |
 | **Sticky Option A** | Lifetime sticky + CLOSE on destroy + mute-until-bound (incl. cold start) | Supersedes #23 |
-
-See also workspace research: `DVC-RESEARCH.md`.

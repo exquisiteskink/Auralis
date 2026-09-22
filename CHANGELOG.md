@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.2 — 2026-09-22
+
+### Fixed
+- Restored the flat Now Playing seek bar and removed the unfinished waveform UI (#25).
+- Kept one audio session for the playback service lifetime, including crossfade, to avoid Poweramp Equalizer DVC volume spikes during session changes. First playback waits briefly while the external EQ binds (#26).
+
+### Validation
+- 50 unit tests passed; Android lint reported 0 errors and 18 warnings; debug and release APKs assembled. Device testing with Poweramp Equalizer was not performed.
+
 ## 1.3.1 — 2026-09-22
 
 ### Fixed
