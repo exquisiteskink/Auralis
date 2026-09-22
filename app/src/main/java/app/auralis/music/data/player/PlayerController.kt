@@ -311,6 +311,34 @@ class PlayerController(
         }
     }
 
+    /**
+     * Adopt a queue set by Android Auto / MediaLibrarySession without calling
+     * MediaController.setMediaItems (session already applies the playable items).
+     */
+    fun adoptExternalQueue(songs: List<Song>, startIndex: Int) {
+        if (songs.isEmpty()) return
+        val idx = startIndex.coerceIn(0, songs.lastIndex)
+        scrobbledId = null
+        listenedMs = 0
+        _state.update {
+            it.copy(
+                queue = songs.toList(),
+                index = idx,
+                positionMs = 0,
+                durationMs = songs.getOrNull(idx)?.duration?.times(1000L) ?: 0L,
+                upcomingIndices = null,
+                playbackError = null,
+            )
+        }
+        if (controller == null) connect()
+        else {
+            songs.getOrNull(idx)?.let {
+                refreshArtwork(it)
+                refreshLyrics(it)
+            }
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             _state.update { it.copy(playbackError = "Playback failed: ${error.errorCodeName}", isPlaying = false) }
