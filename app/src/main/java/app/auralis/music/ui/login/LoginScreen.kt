@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +63,24 @@ fun LoginScreen() {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var httpWarning by remember { mutableStateOf(false) }
+
+    // Retry a prior transient restore failure and prefill saved account fields.
+    LaunchedEffect(Unit) {
+        runCatching { container.restoreSession() }
+        val stored = container.credentials.load() ?: return@LaunchedEffect
+        if (url.isBlank()) url = stored.serverUrl
+        httpWarning = url.trim().startsWith("http://")
+        when (stored.authMode) {
+            AuthMode.ApiKey -> {
+                showApiKey = true
+                if (apiKey.isBlank()) apiKey = stored.apiKey
+            }
+            else -> {
+                if (username.isBlank()) username = stored.username
+                if (password.isBlank()) password = stored.password
+            }
+        }
+    }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = p.onBackground.copy(alpha = 0.45f),
