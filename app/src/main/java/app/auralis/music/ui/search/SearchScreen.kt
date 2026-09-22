@@ -1,14 +1,17 @@
 package app.auralis.music.ui.search
 
 import app.auralis.music.data.remote.suspendRunCatching
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -16,6 +19,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -28,11 +35,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -41,16 +51,28 @@ import app.auralis.music.data.remote.AlbumID3
 import app.auralis.music.data.remote.ArtistID3
 import app.auralis.music.data.remote.Genre
 import app.auralis.music.data.remote.SearchResult3
+import app.auralis.music.data.remote.Song
 import app.auralis.music.ui.components.ArtistTile
+import app.auralis.music.ui.components.CoverArt
 import app.auralis.music.ui.components.GenreChip
 import app.auralis.music.ui.components.HorizontalAlbums
 import app.auralis.music.ui.components.SectionHeader
 import app.auralis.music.ui.components.SongRow
 import app.auralis.music.ui.theme.LocalClient
+import app.auralis.music.ui.theme.LocalContainer
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private data class SearchSuggestion(
+    val key: String,
+    val title: String,
+    val subtitle: String?,
+    val icon: ImageVector,
+    val coverArt: String? = null,
+    val onClick: () -> Unit,
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -60,11 +82,14 @@ fun SearchScreen(
 ) {
     val client = LocalClient.current
     val player = LocalPlayer.current
+    val container = LocalContainer.current
     val p = LocalPalette.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var searchFocused by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf(SearchResult3()) }
+    var suggestions by remember { mutableStateOf(SearchResult3()) }
+    var recentQueries by remember { mutableStateOf(container.recentSearches.list()) }
     var allGenres by remember { mutableStateOf<List<Genre>>(emptyList()) }
     var recentAlbums by remember { mutableStateOf<List<AlbumID3>>(emptyList()) }
 
@@ -73,13 +98,25 @@ fun SearchScreen(
         recentAlbums = suspendRunCatching { client.getAlbumList2("recent", 24) }.getOrDefault(emptyList())
     }
 
+    // Full results — existing search3 (OpenSubsonic / Subsonic / Navidrome).
     LaunchedEffect(query) {
         if (query.isBlank()) {
             result = SearchResult3()
+            suggestions = SearchResult3()
             return@LaunchedEffect
         }
-        delay(280)
-        result = suspendRunCatching { client.search3(query.trim()) }.getOrDefault(SearchResult3())
+        val q = query.trim()
+        // Navidrome ignores single-character search3 queries; still allow UI typing.
+        delay(180)
+        suggestions = suspendRunCatching {
+            client.search3(q, artistCount = 6, albumCount = 6, songCount = 8)
+        }.getOrDefault(SearchResult3())
+        delay(120)
+        result = suspendRunCatching { client.search3(q) }.getOrDefault(SearchResult3())
+        if (q.length >= 2 && (result.artist.isNotEmpty() || result.album.isNotEmpty() || result.song.isNotEmpty())) {
+            container.recentSearches.add(q)
+            recentQueries = container.recentSearches.list()
+        }
     }
 
     val matchedGenres = remember(query, allGenres) {
@@ -90,8 +127,16 @@ fun SearchScreen(
         allGenres.sortedByDescending { it.songCount }.take(24)
     }
     val recentArtists = remember(recentAlbums) { recentArtistsFromAlbums(recentAlbums) }
-    // Spec: blank AND unfocused → genres + recent artists; focus or typing → results only.
+    // Spec: blank AND unfocused → genres + recent artists; focus or typing → results / suggestions.
     val showEmptyBrowse = query.isBlank() && !searchFocused
+    val showRecentQueries = query.isBlank() && searchFocused && recentQueries.isNotEmpty()
+
+    val suggestionRows = remember(suggestions, query) {
+        if (query.isBlank()) emptyList()
+        else buildSuggestions(suggestions, onArtist, onAlbum) { songs, index ->
+            player.play(songs, index)
+        }
+    }
 
     Column(Modifier.fillMaxSize().padding(bottom = 64.dp)) {
         Text(
@@ -163,7 +208,22 @@ fun SearchScreen(
                         }
                     }
                 }
+            } else if (showRecentQueries) {
+                item { SectionHeader("Recent searches") }
+                items(recentQueries, key = { "rq-$it" }) { recent ->
+                    RecentQueryRow(recent) {
+                        query = recent
+                        container.recentSearches.add(recent)
+                        recentQueries = container.recentSearches.list()
+                    }
+                }
             } else {
+                if (suggestionRows.isNotEmpty()) {
+                    item { SectionHeader("Suggestions") }
+                    items(suggestionRows, key = { it.key }) { row ->
+                        SuggestionRow(row)
+                    }
+                }
                 if (matchedGenres.isNotEmpty()) {
                     item { SectionHeader("Genres") }
                     item {
@@ -211,7 +271,13 @@ fun SearchScreen(
                         )
                     }
                 }
-                if (query.isNotBlank() && result.artist.isEmpty() && result.album.isEmpty() && result.song.isEmpty() && matchedGenres.isEmpty()) {
+                if (query.isNotBlank() &&
+                    suggestionRows.isEmpty() &&
+                    result.artist.isEmpty() &&
+                    result.album.isEmpty() &&
+                    result.song.isEmpty() &&
+                    matchedGenres.isEmpty()
+                ) {
                     item {
                         Text(
                             "Nothing matched “$query”",
@@ -223,6 +289,87 @@ fun SearchScreen(
             }
         }
     }
+}
+
+@Composable
+private fun RecentQueryRow(query: String, onClick: () -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.History, null, tint = p.onBackground.copy(alpha = 0.45f), modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(query, color = p.onBackground, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun SuggestionRow(row: SearchSuggestion) {
+    val p = LocalPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = row.onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (row.coverArt != null) {
+            CoverArt(row.coverArt, Modifier.size(40.dp), row.title, corner = 4.dp, fallback = row.icon)
+        } else {
+            Icon(row.icon, null, tint = p.onBackground.copy(alpha = 0.45f), modifier = Modifier.size(40.dp).padding(8.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(row.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp)
+            if (!row.subtitle.isNullOrBlank()) {
+                Text(row.subtitle, color = p.onBackground.copy(alpha = 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+private fun buildSuggestions(
+    result: SearchResult3,
+    onArtist: (String) -> Unit,
+    onAlbum: (String) -> Unit,
+    playSongs: (List<Song>, Int) -> Unit,
+): List<SearchSuggestion> {
+    val rows = ArrayList<SearchSuggestion>(12)
+    result.artist.take(4).forEach { artist ->
+        rows += SearchSuggestion(
+            key = "sug-a-${artist.id}",
+            title = artist.name,
+            subtitle = "Artist",
+            icon = Icons.Rounded.Person,
+            coverArt = artist.coverArt ?: artist.id,
+            onClick = { onArtist(artist.id) },
+        )
+    }
+    result.album.take(4).forEach { album ->
+        rows += SearchSuggestion(
+            key = "sug-al-${album.id}",
+            title = album.displayName,
+            subtitle = album.artist ?: "Album",
+            icon = Icons.Rounded.Album,
+            coverArt = album.coverArt,
+            onClick = { onAlbum(album.id) },
+        )
+    }
+    result.song.take(4).forEachIndexed { index, song ->
+        rows += SearchSuggestion(
+            key = "sug-s-${song.id}-$index",
+            title = song.title,
+            subtitle = song.artist ?: "Song",
+            icon = Icons.Rounded.MusicNote,
+            coverArt = song.coverArt,
+            onClick = { playSongs(result.song, index) },
+        )
+    }
+    return rows.take(10)
 }
 
 private fun recentArtistsFromAlbums(albums: List<AlbumID3>): List<ArtistID3> {
