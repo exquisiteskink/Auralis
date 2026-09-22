@@ -90,6 +90,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun MetaRow(
     codec: String?,
+    bitDepth: Int,
     sampleRate: String?,
     favorite: Boolean,
     lyricsOpen: Boolean,
@@ -98,6 +99,10 @@ internal fun MetaRow(
 ) {
     val p = LocalPalette.current
     val mute = p.onBackground.copy(alpha = 0.45f)
+    val audioFormat = listOfNotNull(
+        bitDepth.takeIf { it > 0 }?.let { "$it-bit" },
+        sampleRate?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -123,9 +128,9 @@ internal fun MetaRow(
                 modifier = Modifier.size(22.dp),
             )
         }
-        if (!sampleRate.isNullOrBlank()) {
+        if (audioFormat.isNotEmpty()) {
             Spacer(Modifier.width(12.dp))
-            Text(sampleRate, color = mute, fontSize = 13.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.Medium)
+            Text(audioFormat, color = mute, fontSize = 13.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

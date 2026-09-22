@@ -382,6 +382,7 @@ private fun NowPlayingPage(
             Spacer(Modifier.height(12.dp))
             MetaRow(
                 codec = song.codecLabel,
+                bitDepth = song.bitDepth,
                 sampleRate = song.sampleRateLabel,
                 favorite = ui.isFavorite(song),
                 lyricsOpen = showLyrics,
