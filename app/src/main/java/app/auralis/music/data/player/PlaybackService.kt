@@ -156,7 +156,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 applyGapless(exo)
             }
             PlayerSettings.PAUSE_DISC -> applyDisconnectPolicy(exo)
-            PlayerSettings.SLEEP_MINUTES, PlayerSettings.SLEEP_DEADLINE -> armSleepTimerFromSettings()
+            PlayerSettings.SLEEP_MINUTES,
+            PlayerSettings.SLEEP_DEADLINE,
+            PlayerSettings.SLEEP_DEADLINE_WALL,
+            PlayerSettings.SLEEP_DEADLINE_BOOT_COUNT,
+            -> armSleepTimerFromSettings()
         }
     }
 
@@ -376,12 +380,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 // ExoPlayer pauses at the item boundary, including repeat, without polling.
             }
             else -> {
-                val deadline = settings.sleepDeadlineElapsed
-                val delay = if (deadline > 0L) {
-                    deadline - SystemClock.elapsedRealtime()
-                } else {
-                    minutes * 60_000L
-                }
+                val delay = SleepTimerDeadline.remainingDelayMs(
+                    savedBootCount = settings.sleepDeadlineBootCount,
+                    currentBootCount = settings.currentBootCount,
+                    elapsedDeadlineMs = settings.sleepDeadlineElapsed,
+                    wallDeadlineMs = settings.sleepDeadlineWallMs,
+                    elapsedNowMs = SystemClock.elapsedRealtime(),
+                    wallNowMs = System.currentTimeMillis(),
+                    fallbackDurationMs = minutes * 60_000L,
+                )
                 if (delay <= 0L) {
                     onSleepTimerFired()
                 } else {

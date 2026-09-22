@@ -2,13 +2,15 @@ package app.auralis.music.data.player
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.provider.Settings
 import kotlin.math.roundToInt
 
 enum class ReplayGainMode { Off, Track, Album }
 
 class PlayerSettings(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     var replayGainMode: ReplayGainMode
         get() = ReplayGainMode.entries.getOrElse(prefs.getInt(RG_MODE, 0)) { ReplayGainMode.Off }
@@ -53,19 +55,39 @@ class PlayerSettings(context: Context) {
         get() = prefs.getLong(SLEEP_DEADLINE, 0L)
         set(value) { prefs.edit().putLong(SLEEP_DEADLINE, value).apply() }
 
+    /**
+     * Wall-clock (`System.currentTimeMillis()`) deadline for minute-based timers.
+     * Survives reboot; [sleepDeadlineElapsed] alone does not (`elapsedRealtime` resets).
+     */
+    var sleepDeadlineWallMs: Long
+        get() = prefs.getLong(SLEEP_DEADLINE_WALL, 0L)
+        set(value) { prefs.edit().putLong(SLEEP_DEADLINE_WALL, value).apply() }
+
+    val currentBootCount: Int
+        get() = Settings.Global.getInt(appContext.contentResolver, Settings.Global.BOOT_COUNT, -1)
+
+    var sleepDeadlineBootCount: Int
+        get() = prefs.getInt(SLEEP_DEADLINE_BOOT_COUNT, -1)
+        set(value) { prefs.edit().putInt(SLEEP_DEADLINE_BOOT_COUNT, value).apply() }
+
     fun clearSleepTimer() {
         prefs.edit()
             .putInt(SLEEP_MINUTES, 0)
             .putLong(SLEEP_DEADLINE, 0L)
+            .putLong(SLEEP_DEADLINE_WALL, 0L)
+            .putInt(SLEEP_DEADLINE_BOOT_COUNT, -1)
             .apply()
     }
 
     fun armSleepMinutes(minutes: Int) {
         require(minutes in SLEEP_MINUTE_OPTIONS)
-        val deadline = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
+        val elapsedDeadline = android.os.SystemClock.elapsedRealtime() + minutes * 60_000L
+        val wallDeadline = System.currentTimeMillis() + minutes * 60_000L
         prefs.edit()
             .putInt(SLEEP_MINUTES, minutes)
-            .putLong(SLEEP_DEADLINE, deadline)
+            .putLong(SLEEP_DEADLINE, elapsedDeadline)
+            .putLong(SLEEP_DEADLINE_WALL, wallDeadline)
+            .putInt(SLEEP_DEADLINE_BOOT_COUNT, currentBootCount)
             .apply()
     }
 
@@ -73,6 +95,8 @@ class PlayerSettings(context: Context) {
         prefs.edit()
             .putInt(SLEEP_MINUTES, SLEEP_END_OF_TRACK)
             .putLong(SLEEP_DEADLINE, 0L)
+            .putLong(SLEEP_DEADLINE_WALL, 0L)
+            .putInt(SLEEP_DEADLINE_BOOT_COUNT, -1)
             .apply()
     }
 
@@ -122,6 +146,8 @@ class PlayerSettings(context: Context) {
         const val PAUSE_DISC = "pause_disconnect"
         const val SLEEP_MINUTES = "sleep_minutes"
         const val SLEEP_DEADLINE = "sleep_deadline"
+        const val SLEEP_DEADLINE_WALL = "sleep_deadline_wall"
+        const val SLEEP_DEADLINE_BOOT_COUNT = "sleep_deadline_boot_count"
         const val SLEEP_END_OF_TRACK = -1
         val SLEEP_MINUTE_OPTIONS = setOf(15, 30, 45, 60)
 
@@ -139,5 +165,23 @@ class PlayerSettings(context: Context) {
             val s = ms / 1000f
             return if (s == s.roundToInt().toFloat()) "${s.roundToInt()} s" else "${"%.1f".format(s)} s"
         }
+    }
+}
+
+internal object SleepTimerDeadline {
+    fun remainingDelayMs(
+        savedBootCount: Int,
+        currentBootCount: Int,
+        elapsedDeadlineMs: Long,
+        wallDeadlineMs: Long,
+        elapsedNowMs: Long,
+        wallNowMs: Long,
+        fallbackDurationMs: Long,
+    ): Long = when {
+        savedBootCount >= 0 && savedBootCount == currentBootCount && elapsedDeadlineMs > 0L ->
+            elapsedDeadlineMs - elapsedNowMs
+        wallDeadlineMs > 0L -> wallDeadlineMs - wallNowMs
+        elapsedDeadlineMs > 0L -> elapsedDeadlineMs - elapsedNowMs
+        else -> fallbackDurationMs
     }
 }
