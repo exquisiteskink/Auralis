@@ -564,17 +564,19 @@ class PlayerController(
         val key = downloadStore?.serverKey(creds) ?: "default"
         val c = controller
         lastPersistAtMs = now
-        queueStore.save(
-            PlaybackQueueStore.Snapshot(
-                serverKey = key,
-                songs = st.queue,
-                index = st.index,
-                positionMs = (c?.currentPosition ?: st.positionMs).coerceAtLeast(0L),
-                playWhenReady = c?.playWhenReady ?: st.isPlaying,
-                shuffle = c?.shuffleModeEnabled ?: st.shuffle,
-                repeatMode = c?.repeatMode ?: st.repeatMode,
-            ),
+        val snap = PlaybackQueueStore.Snapshot(
+            serverKey = key,
+            songs = st.queue,
+            index = st.index,
+            positionMs = (c?.currentPosition ?: st.positionMs).coerceAtLeast(0L),
+            playWhenReady = c?.playWhenReady ?: st.isPlaying,
+            shuffle = c?.shuffleModeEnabled ?: st.shuffle,
+            repeatMode = c?.repeatMode ?: st.repeatMode,
         )
+        // Encode/write off the main thread — queues can be hundreds of Songs.
+        scope.launch(Dispatchers.IO) {
+            queueStore.save(snap)
+        }
     }
 
     private fun Song.toMediaItem(): MediaItem {
