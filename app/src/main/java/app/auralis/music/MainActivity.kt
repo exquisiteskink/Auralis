@@ -6,6 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -58,6 +60,7 @@ import app.auralis.music.ui.playlist.PlaylistScreen
 import app.auralis.music.ui.search.SearchScreen
 import app.auralis.music.ui.settings.AppearancePrefs
 import app.auralis.music.ui.settings.SettingsScreen
+import app.auralis.music.ui.theme.AuralisMotion
 import app.auralis.music.ui.theme.AuralisTheme
 import app.auralis.music.ui.theme.LocalClient
 import app.auralis.music.ui.theme.LocalContainer
@@ -241,8 +244,26 @@ private fun AuralisRoot(
                 navController = nav,
                 startDestination = if (loggedIn) "home" else "login",
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
-                enterTransition = { fadeIn() },
-                exitTransition = { fadeOut() },
+                enterTransition = {
+                    fadeIn(animationSpec = AuralisMotion.fade()) +
+                        slideInHorizontally(
+                            animationSpec = AuralisMotion.emphasized(),
+                            initialOffsetX = { it / 28 },
+                        )
+                },
+                exitTransition = {
+                    fadeOut(animationSpec = AuralisMotion.standard())
+                },
+                popEnterTransition = {
+                    fadeIn(animationSpec = AuralisMotion.fade())
+                },
+                popExitTransition = {
+                    fadeOut(animationSpec = AuralisMotion.standard()) +
+                        slideOutHorizontally(
+                            animationSpec = AuralisMotion.emphasized(),
+                            targetOffsetX = { it / 28 },
+                        )
+                },
             ) {
                 composable("login") { LoginScreen() }
                 composable("home") {
