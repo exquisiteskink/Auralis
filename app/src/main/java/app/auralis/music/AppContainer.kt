@@ -26,25 +26,39 @@ class AppContainer(context: Context) {
 
     private val _loggedIn = MutableStateFlow(false)
     val loggedIn: StateFlow<Boolean> = _loggedIn
+
+    /**
+     * False while a cold-start restore with saved credentials is still in flight.
+     * UI must not show [Login] until this is true — otherwise saved sessions flash Login.
+     * Starts true when there is no credential blob (Login is the correct first screen).
+     */
+    private val _authResolved = MutableStateFlow(!credentials.hasCredentials())
+    val authResolved: StateFlow<Boolean> = _authResolved
+
     private val loginMutex = Mutex()
     private var restored = false
 
     suspend fun restoreSession() = loginMutex.withLock {
-        if (restored || _loggedIn.value) return@withLock
+        // Allow retries after transient failures even if we already opened the app shell.
+        if (restored) return@withLock
         val stored = credentials.load()
         if (stored == null) {
+            if (credentials.hasCredentials()) credentials.clear()
             restored = true
+            setLoggedIn(false)
+            _authResolved.value = true
             return@withLock
         }
-        // Credentials were saved only after a successful login. Local playback must
-        // not depend on a fresh network round trip on every process launch.
+        // Credentials were saved only after a successful login. Prefer the app shell
+        // (or a brief splash) over Login while we validate — never loop Login on valid store.
+        client.credentials = stored
         val hasDownloads = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             downloadStore.availableSongs(downloadStore.serverKey(stored)).isNotEmpty()
         }
         if (hasDownloads) {
-            client.credentials = stored
             restored = true
             setLoggedIn(true)
+            _authResolved.value = true
             return@withLock
         }
         try {
@@ -52,18 +66,23 @@ class AppContainer(context: Context) {
             credentials.save(accepted)
             restored = true
             setLoggedIn(true)
+            _authResolved.value = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            client.credentials = null
-            setLoggedIn(false)
             if (e is app.auralis.music.data.remote.SubsonicException && e.code in listOf(40, 41, 42, 43, 44)) {
-                // Permanent auth failure — forget the saved session.
+                // Permanent auth failure — forget the saved session and show Login.
+                client.credentials = null
                 credentials.clear()
                 restored = true
+                setLoggedIn(false)
+                _authResolved.value = true
+            } else {
+                // Transient network/server errors: keep encrypted store, stay in the app
+                // (or finish splash into app). Leave restored=false so Auto / Login can retry.
+                setLoggedIn(true)
+                _authResolved.value = true
             }
-            // Transient network/server errors: keep the encrypted store and leave
-            // restored=false so Login / Android Auto can retry restoreSession().
         }
     }
 
@@ -74,6 +93,7 @@ class AppContainer(context: Context) {
             credentials.save(accepted)
             restored = true
             setLoggedIn(true)
+            _authResolved.value = true
         } catch (e: Exception) {
             client.credentials = null
             throw e
@@ -89,6 +109,7 @@ class AppContainer(context: Context) {
         credentials.clear()
         restored = true
         setLoggedIn(false)
+        _authResolved.value = true
     }
 
     fun setLoggedIn(value: Boolean) {

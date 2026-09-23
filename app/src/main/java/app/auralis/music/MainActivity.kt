@@ -10,6 +10,11 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -92,6 +97,7 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.derivedStateOf { playerState.value.palette }
             }
             val loggedIn by container.loggedIn.collectAsState()
+            val authResolved by container.authResolved.collectAsState()
             val systemDark = isSystemInDarkTheme()
             val dark = when (themeMode) {
                 ThemeMode.System -> systemDark
@@ -122,19 +128,25 @@ class MainActivity : ComponentActivity() {
                         WindowCompat.getInsetsController(window, window.decorView)
                             .isAppearanceLightStatusBars = !p.isDark
                     }
-                    AuralisRoot(
-                        loggedIn = loggedIn,
-                        themeMode = themeMode,
-                        onThemeMode = { themeMode = it; prefs.themeMode = it },
-                        transcode = transcode,
-                        onTranscode = {
-                            transcode = it
-                            prefs.transcode = it
-                            container.player.applyTranscode(it)
-                            val creds = container.credentials.load()
-                            if (creds != null) container.credentials.save(creds.copy(transcodeBitrate = it))
-                        },
-                    )
+                    // Login only after auth is resolved AND there is no session.
+                    // Saved credentials → splash then app (never a Login flash/loop).
+                    if (!authResolved) {
+                        SessionSplash()
+                    } else {
+                        AuralisRoot(
+                            loggedIn = loggedIn,
+                            themeMode = themeMode,
+                            onThemeMode = { themeMode = it; prefs.themeMode = it },
+                            transcode = transcode,
+                            onTranscode = {
+                                transcode = it
+                                prefs.transcode = it
+                                container.player.applyTranscode(it)
+                                val creds = container.credentials.load()
+                                if (creds != null) container.credentials.save(creds.copy(transcodeBitrate = it))
+                            },
+                        )
+                    }
                 }
             }
         }
