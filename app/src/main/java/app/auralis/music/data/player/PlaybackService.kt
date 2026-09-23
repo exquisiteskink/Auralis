@@ -17,6 +17,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Timeline
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -70,6 +71,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     /** True while muted waiting for OPEN settle (cold start / unexpected rebind). */
     private var sessionBindPending = false
     private var settleRunnable: Runnable? = null
+
+    /** Auto-retry after transient IO / network [onPlayerError] (does not rebuild player / sticky id). */
+    private var errorRetryAttempt = 0
+    private var errorRetryRunnable: Runnable? = null
+    private var resumeAfterError = false
 
     private val sleepFire = Runnable { onSleepTimerFired() }
     private val sleepState = SleepTimerState()
@@ -142,7 +148,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun installPlayerListeners(exo: ExoPlayer) {
         exo.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (player === exo) applyReplayGain(exo, mediaItem, eqMain)
+                if (player !== exo) return
+                // Intentional track change: drop pending network retries for the prior item.
+                if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                    resetErrorRetry(clearResume = true)
+                }
+                applyReplayGain(exo, mediaItem, eqMain)
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -166,13 +177,29 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 if (player === exo && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
                     cancelCrossfade()
                     cancelSleepFromUser()
+                    resetErrorRetry(clearResume = true)
                 }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (player !== exo) return
+                if (playbackState == Player.STATE_READY) {
+                    resetErrorRetry(clearResume = true)
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (player !== exo) return
+                cancelCrossfade()
+                handlePrimaryPlayerError(exo, error)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (player !== exo) return
                 if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
                     cancelCrossfade()
+                    // User paused while we were recovering — stop auto-retry.
+                    resetErrorRetry(clearResume = true)
                 }
                 // Resume after pause: if somehow unbound, re-assert mute-until-bound.
                 if (playWhenReady && stickySessionId != 0 &&
@@ -187,6 +214,85 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 }
             }
         })
+    }
+
+    /**
+     * Transient network / HTTP errors: prepare again with exponential backoff.
+     * Does **not** rebuild ExoPlayer or touch sticky [audioSessionId] / EQ OPEN/CLOSE.
+     */
+    private fun handlePrimaryPlayerError(exo: ExoPlayer, error: PlaybackException) {
+        val wantPlay = exo.playWhenReady || resumeAfterError
+        resumeAfterError = wantPlay
+        if (!PlaybackErrors.isTransient(error) || errorRetryAttempt >= MAX_ERROR_RETRIES) {
+            Log.w(
+                TAG,
+                "playback error (no auto-retry attempt=$errorRetryAttempt): ${error.errorCodeName}",
+                error,
+            )
+            return
+        }
+        val attempt = errorRetryAttempt
+        errorRetryAttempt = attempt + 1
+        val delayMs = ERROR_RETRY_BASE_MS * (1L shl attempt.coerceAtMost(3))
+        Log.i(
+            TAG,
+            "transient playback error ${error.errorCodeName}; auto-retry ${attempt + 1}/$MAX_ERROR_RETRIES in ${delayMs}ms",
+        )
+        scheduleErrorRetry(exo, delayMs, wantPlay)
+    }
+
+    private fun scheduleErrorRetry(exo: ExoPlayer, delayMs: Long, play: Boolean) {
+        cancelErrorRetryCallback()
+        val r = Runnable {
+            errorRetryRunnable = null
+            if (player !== exo) return@Runnable
+            if (exo.mediaItemCount == 0) return@Runnable
+            val idx = exo.currentMediaItemIndex.coerceAtLeast(0)
+            val pos = exo.currentPosition.coerceAtLeast(0L)
+            Log.i(TAG, "auto-retry prepare idx=$idx pos=$pos play=$play")
+            runCatching {
+                // Refresh stream URI (fresh salt) then prepare — same recovery energy as
+                // playing a new album / PlayerController.reprepareFromQueue, without
+                // rebuilding ExoPlayer or touching sticky audioSessionId.
+                val item = exo.getMediaItemAt(idx)
+                val fresh = refreshMediaItemStreamUri(item)
+                if (fresh.localConfiguration?.uri != item.localConfiguration?.uri) {
+                    exo.replaceMediaItem(idx, fresh)
+                    exo.seekTo(idx, pos)
+                }
+                exo.prepare()
+                if (play) exo.play()
+            }.onFailure { Log.w(TAG, "auto-retry prepare failed", it) }
+        }
+        errorRetryRunnable = r
+        handler.postDelayed(r, delayMs)
+    }
+
+    /**
+     * Rebuild remote stream URI from mediaId + current credentials.
+     * Local/offline URIs are left unchanged. Does not touch audio session / EQ.
+     */
+    private fun refreshMediaItemStreamUri(item: MediaItem): MediaItem {
+        val id = item.mediaId
+        if (id.isNullOrBlank()) return item
+        val uri = item.localConfiguration?.uri ?: return item
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "file" || scheme == "content") return item
+        val client = (application as AuralisApp).container.client
+        if (client.credentials == null) return item
+        val maxBr = uri.getQueryParameter("maxBitRate")?.toIntOrNull() ?: 0
+        return item.buildUpon().setUri(client.streamUrl(id, maxBr)).build()
+    }
+
+    private fun cancelErrorRetryCallback() {
+        errorRetryRunnable?.let { handler.removeCallbacks(it) }
+        errorRetryRunnable = null
+    }
+
+    private fun resetErrorRetry(clearResume: Boolean) {
+        cancelErrorRetryCallback()
+        errorRetryAttempt = 0
+        if (clearResume) resumeAfterError = false
     }
 
     /**
@@ -244,6 +350,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         handler.removeCallbacks(sleepFire)
         settleRunnable?.let { handler.removeCallbacks(it) }
         settleRunnable = null
+        resetErrorRetry(clearResume = true)
         cancelCrossfade()
         volumeAnim?.cancel()
         volumeAnim = null
@@ -517,7 +624,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         if (existing != null && pendingNextIndex == nextIndex) return
         releasePendingFadePlayer()
 
-        val items = (0 until from.mediaItemCount).map { from.getMediaItemAt(it) }
+        // Refresh stream URIs before CF prepare so the next track is not an
+        // enqueue-time URL (owner: dies after ~2 songs; new album recovers).
+        val items = (0 until from.mediaItemCount).map { refreshMediaItemStreamUri(from.getMediaItemAt(it)) }
         val next = buildPlayer(handleAudioFocus = false)
         // buildPlayer already set stickySessionId. Re-assert before prepare; if sticky
         // generation failed, share primary session (Option A / #23 absorb).
@@ -764,6 +873,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         private const val SESSION_SETTLE_MS = 80L
         /** How far ahead of the fade window to prepare the next ExoPlayer. */
         private const val PREPARE_LEAD_MS = 8_000L
+        /** Transient IO auto-retry after [Player.Listener.onPlayerError]. */
+        private const val MAX_ERROR_RETRIES = 4
+        private const val ERROR_RETRY_BASE_MS = 750L
     }
 }
 

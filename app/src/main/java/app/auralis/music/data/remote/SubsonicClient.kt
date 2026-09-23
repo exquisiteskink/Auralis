@@ -37,7 +37,12 @@ class SubsonicClient(
     @Volatile
     var credentials: StoredCredentials? = null
 
-    /** Stable salt so cover/stream URLs stay cacheable for the session. */
+    /**
+     * Stable salt for cover-art URLs so Coil can cache within a session.
+     * Stream/download URLs intentionally use a fresh salt per [streamUrl]/[downloadUrl]
+     * build ([buildUrl] session=false) so MediaItem rebuilds are not identical
+     * enqueue-time strings (help after keep-alive drops / sticky player errors).
+     */
     @Volatile
     private var sessionSalt: String = randomSalt()
 
@@ -218,7 +223,10 @@ class SubsonicClient(
             extra["maxBitRate"] = "0"
             extra["format"] = "raw"
         }
-        return buildUrl("stream", extra, session = true).toString()
+        // Fresh salt/token per URL — Subsonic token auth does not expire, but a unique
+        // query string forces a new DataSource open when MediaItems are rebuilt on
+        // transition / Retry (same recovery energy as playing a new album).
+        return buildUrl("stream", extra, session = false).toString()
     }
 
     /**
@@ -226,7 +234,7 @@ class SubsonicClient(
      * URL for the original media file. Same auth as [streamUrl]. Do not persist — query may contain credentials.
      */
     fun downloadUrl(songId: String, creds: StoredCredentials = credentials ?: throw SubsonicException(40, "Not signed in")): String {
-        return buildUrl("download", mapOf("id" to songId), session = true, creds = creds).toString()
+        return buildUrl("download", mapOf("id" to songId), session = false, creds = creds).toString()
     }
 
     private suspend fun get(endpoint: String, vararg params: Pair<String, String>): SubsonicEnvelope =

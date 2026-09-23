@@ -268,12 +268,14 @@ internal fun PositionAwareMiniBar(
     position: State<Long>,
     modifier: Modifier = Modifier,
     onPlayPause: () -> Unit,
+    onRetry: () -> Unit = onPlayPause,
 ) {
     MiniBar(
         ui = ui,
         positionMs = position.value,
         modifier = modifier,
         onPlayPause = onPlayPause,
+        onRetry = onRetry,
     )
 }
 
@@ -283,10 +285,12 @@ internal fun MiniBar(
     positionMs: Long,
     modifier: Modifier = Modifier,
     onPlayPause: () -> Unit,
+    onRetry: () -> Unit = onPlayPause,
 ) {
     val p = LocalPalette.current
     val song = ui.current ?: return
     val progress = if (ui.durationMs > 0) (positionMs.toFloat() / ui.durationMs).coerceIn(0f, 1f) else 0f
+    val err = ui.playbackError
     Column(
         modifier
             .fillMaxWidth()
@@ -316,17 +320,28 @@ internal fun MiniBar(
             Column(Modifier.weight(1f)) {
                 Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Text(
-                    ui.playbackError ?: song.artist.orEmpty(),
-                    color = p.onBackground.copy(alpha = 0.7f),
+                    err ?: song.artist.orEmpty(),
+                    color = if (err != null) p.primary else p.onBackground.copy(alpha = 0.7f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontSize = 13.sp,
                 )
             }
-            IconButton(onClick = onPlayPause) {
+            if (err != null) {
+                Text(
+                    "Retry",
+                    modifier = Modifier
+                        .clickable(onClick = onRetry)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    color = p.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+            }
+            IconButton(onClick = if (err != null) onRetry else onPlayPause) {
                 Icon(
                     if (ui.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    if (ui.isPlaying) "Pause" else "Play",
+                    if (err != null) "Retry" else if (ui.isPlaying) "Pause" else "Play",
                     tint = p.onBackground,
                 )
             }
