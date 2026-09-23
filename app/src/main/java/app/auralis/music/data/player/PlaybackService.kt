@@ -41,10 +41,17 @@ import kotlin.math.abs
  * Playback service with a **sticky lifetime audio session** for Poweramp EQ DVC.
  *
  * Option A (maxmpz guidance): one [AudioManager.generateAudioSessionId] for the
- * whole service life; every ExoPlayer (primary + crossfade) uses that id; OPEN
- * once before audible output; CLOSE only on [onDestroy]. Mute-until-bound covers
- * cold start / resume and rare unexpected session changes — not the primary path
- * for skip/CF (those stay on the sticky id with no CLOSE/OPEN).
+ * whole service life; every ExoPlayer uses that id; OPEN once before audible
+ * output; CLOSE only on [onDestroy].
+ *
+ * Option B: when [ExternalEqRisk] says dual-player is unsafe (Poweramp EQ
+ * installed, etc.), **do not** run dual-ExoPlayer crossfade — single player owns
+ * the sticky session (gapless / Media3 default transitions). Removes the second
+ * AudioTrack / promote-teardown unbound window class.
+ *
+ * Mute-until-bound (volume 0 → wait READY → settle → ramp) remains the safety
+ * belt on every media transition even with a single player (OEM AudioTrack
+ * recreate under sticky id).
  */
 @UnstableApi
 class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
@@ -68,7 +75,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     /** Service-lifetime session; 0 only if [AudioManager.generateAudioSessionId] failed. */
     private var stickySessionId = 0
 
-    /** True while muted waiting for OPEN settle (cold start / unexpected rebind). */
+    /** True while muted waiting for READY + OPEN settle (any media transition). */
     private var sessionBindPending = false
     private var settleRunnable: Runnable? = null
 
@@ -76,6 +83,16 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private var errorRetryAttempt = 0
     private var errorRetryRunnable: Runnable? = null
     private var resumeAfterError = false
+
+    /** ElapsedRealtime when fade player became READY; 0 if not yet. */
+    private var pendingReadyAtElapsed = 0L
+
+    /**
+     * Cached Option B gate. Re-evaluated periodically / when CF prefs change.
+     * true ⇒ dual-ExoPlayer crossfade must not run.
+     */
+    private var dualPlayerCfBlocked = false
+    private var dualPlayerCfCheckedAtElapsed = 0L
 
     private val sleepFire = Runnable { onSleepTimerFired() }
     private val sleepState = SleepTimerState()
@@ -91,6 +108,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         super.onCreate()
         settings = PlayerSettings(this)
         settings.register(this)
+        refreshDualPlayerCfGate(force = true)
 
         // 1) Allocate sticky session at service start — NOT deferred to first prepare.
         stickySessionId = generateStickySessionId()
@@ -153,7 +171,10 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
                     resetErrorRetry(clearResume = true)
                 }
-                applyReplayGain(exo, mediaItem, eqMain)
+                // Skip/album/auto: mute before any RG→volume=1f. CF promote uses
+                // finishCrossfade (no transition on the promoted player).
+                if (fading) return
+                beginMuteUntilBound(exo, eqMain, reason = transitionMuteReason(reason))
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -168,21 +189,27 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             ) {
                 if (player !== exo) return
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    cancelCrossfade()
+                    cancelCrossfade(restoreVolume = !sessionBindPending)
                     cancelSleepFromUser()
                 }
             }
 
             override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-                if (player === exo && reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
-                    cancelCrossfade()
-                    cancelSleepFromUser()
-                    resetErrorRetry(clearResume = true)
-                }
+                if (player !== exo) return
+                if (reason != Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) return
+                // Album change / setMediaItems: mute FIRST so cancelCrossfade cannot
+                // applyReplayGain→volume=1f while the new AudioTrack is unbound.
+                beginMuteUntilBound(exo, eqMain, reason = "playlist-changed")
+                cancelCrossfade(restoreVolume = false)
+                cancelSleepFromUser()
+                resetErrorRetry(clearResume = true)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (player !== exo) return
+                if (playbackState == Player.STATE_READY && sessionBindPending) {
+                    armSettleAfterReady(exo)
+                }
                 if (playbackState == Player.STATE_READY) {
                     resetErrorRetry(clearResume = true)
                 }
@@ -190,14 +217,14 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
             override fun onPlayerError(error: PlaybackException) {
                 if (player !== exo) return
-                cancelCrossfade()
+                cancelCrossfade(restoreVolume = !sessionBindPending)
                 handlePrimaryPlayerError(exo, error)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (player !== exo) return
                 if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
-                    cancelCrossfade()
+                    cancelCrossfade(restoreVolume = !sessionBindPending)
                     // User paused while we were recovering — stop auto-retry.
                     resetErrorRetry(clearResume = true)
                 }
@@ -214,6 +241,14 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 }
             }
         })
+    }
+
+    private fun transitionMuteReason(reason: Int): String = when (reason) {
+        Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> "transition-seek"
+        Player.MEDIA_ITEM_TRANSITION_REASON_AUTO -> "transition-auto"
+        Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> "transition-playlist"
+        Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT -> "transition-repeat"
+        else -> "transition-$reason"
     }
 
     /**
@@ -333,7 +368,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             }
             PlayerSettings.RG_MODE, PlayerSettings.RG_LIMIT -> applyReplayGain(exo, exo.currentMediaItem, eqMain)
             PlayerSettings.GAPLESS, PlayerSettings.CROSSFADE -> {
-                if (!settings.gapless) cancelCrossfade()
+                refreshDualPlayerCfGate(force = true)
+                if (!settings.gapless || !dualPlayerCrossfadeAllowed()) cancelCrossfade()
                 applyGapless(exo)
             }
             PlayerSettings.PAUSE_DISC -> applyDisconnectPolicy(exo)
@@ -427,7 +463,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     /**
      * Attach built-in EQ/RG (DynamicsProcessing) to the player's session.
      * With sticky id: never CLOSE here — only OPEN once via [notifyExternalEqSession].
-     * [muteUntilBound]: cold start / unexpected rebind — keep volume at 0 until settle.
+     * [muteUntilBound]: keep volume at 0 until READY+settle (cold start / rebind).
      */
     private fun attachEq(
         exo: ExoPlayer,
@@ -476,7 +512,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         volumeAnim?.cancel()
         volumeAnim = null
         sessionBindPending = true
+        // Hard mute immediately — never leave volume=1f across AudioTrack recreate.
         exo.volume = 0f
+        fadePlayer?.volume = 0f
 
         if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
             runCatching { exo.setAudioSessionId(stickySessionId) }
@@ -487,10 +525,32 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             notifyExternalEqSession(sid, open = true)
         }
 
+        // Do not arm settle until STATE_READY (AudioTrack exists). If already READY
+        // (skip within same decoder), settle after SESSION_SETTLE_MS.
+        settleRunnable?.let { handler.removeCallbacks(it) }
+        settleRunnable = null
+        if (exo.playbackState == Player.STATE_READY) {
+            armSettleAfterReady(exo)
+        }
+    }
+
+    /**
+     * After mute: wait until the player is READY, then [SESSION_SETTLE_MS] for
+     * Poweramp EQ to bind/settle on the sticky session before any audible ramp.
+     */
+    private fun armSettleAfterReady(exo: ExoPlayer) {
+        if (!sessionBindPending || player !== exo) return
+        if (exo.playbackState != Player.STATE_READY) return
         settleRunnable?.let { handler.removeCallbacks(it) }
         val token = exo
         val settle = Runnable {
             if (player !== token) return@Runnable
+            if (!sessionBindPending) return@Runnable
+            // Still not READY (rare race) — wait again.
+            if (token.playbackState != Player.STATE_READY) {
+                settleRunnable = null
+                return@Runnable
+            }
             sessionBindPending = false
             settleRunnable = null
             Log.i(TAG, "settle complete — ramp to RG/DVC target")
@@ -515,13 +575,13 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         )
         val viaEffect = eq.applyReplayGainLinear(rgLinear, settings)
         if (viaEffect) {
-            // DVC path: keep AudioTrack volume at unity. Snap only when already near
-            // target so we never run a visible ramp that fights Poweramp.
+            // DVC path: target AudioTrack volume = unity. Never hard-snap from a
+            // muted / low level to 1f (blast if PA still unbound). Ramp from low;
+            // only snap when already near unity (avoid fighting PA with a ramp).
             volumeAnim?.cancel()
             volumeAnim = null
             if (abs(exo.volume - 1f) >= 0.01f) {
-                // After mute-until-bound, ramp up rather than hard snap from 0.
-                if (exo.volume < 0.05f) {
+                if (exo.volume < 0.5f) {
                     setPlayerVolumeSmooth(exo, 1f)
                 } else {
                     exo.volume = 1f
@@ -578,7 +638,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     private fun maybeStartCrossfade() {
         if (fading || sleepState.endOfTrack) return
-        if (!settings.gapless || !settings.crossfade) {
+        if (!settings.gapless || !settings.crossfade || !dualPlayerCrossfadeAllowed()) {
+            // Option B: external EQ risk → single-player only (no second AudioTrack).
             releasePendingFadePlayer()
             return
         }
@@ -606,9 +667,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         }
 
         // Only start the volume ramp once we are inside the fade window AND the next
-        // player is READY. Do not duck the outgoing track while the next is cold.
+        // player is READY + settled (PA EQ bind window on shared sticky session).
+        // Do not duck the outgoing track while the next is cold / unbound.
         if (remain <= 0 || remain > fade) return
         if (fadePlayer == null || !pendingReady) return
+        if (pendingReadyAtElapsed == 0L) return
+        if (SystemClock.elapsedRealtime() - pendingReadyAtElapsed < SESSION_SETTLE_MS) return
         beginCrossfadeRamp(exo, fadeMs = minOf(fade, remain).coerceAtLeast(200L))
     }
 
@@ -620,6 +684,10 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
      * Both players share [stickySessionId] — no second session from [buildPlayer].
      */
     private fun ensureNextPrepared(from: ExoPlayer, nextIndex: Int) {
+        if (!dualPlayerCrossfadeAllowed()) {
+            releasePendingFadePlayer()
+            return
+        }
         val existing = fadePlayer
         if (existing != null && pendingNextIndex == nextIndex) return
         releasePendingFadePlayer()
@@ -641,6 +709,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         fadePlayer = next
         pendingNextIndex = nextIndex
         pendingReady = false
+        pendingReadyAtElapsed = 0L
         pendingNextLinear = ReplayGainProcessor.fromExtras(
             items[nextIndex].mediaMetadata.extras,
             settings.replayGainMode,
@@ -662,14 +731,22 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (fadePlayer !== next) return
                 if (playbackState == Player.STATE_READY) {
-                    pendingReady = true
+                    markFadePlayerReady()
                 }
             }
         })
         next.prepare()
         // prepare() may already be READY before the listener is observed.
         if (next.playbackState == Player.STATE_READY) {
+            markFadePlayerReady()
+        }
+    }
+
+    private fun markFadePlayerReady() {
+        if (!pendingReady) {
             pendingReady = true
+            pendingReadyAtElapsed = SystemClock.elapsedRealtime()
+            Log.d(TAG, "fade player READY — settle ${SESSION_SETTLE_MS}ms before CF ramp")
         }
     }
 
@@ -728,6 +805,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         if (!fading || player !== from || fadePlayer !== next) return
         fadePlayer = null
         pendingReady = false
+        pendingReadyAtElapsed = 0L
         pendingNextIndex = C.INDEX_UNSET
         rgLinear = nextLinear
         fading = false
@@ -749,8 +827,15 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         session?.player = next
         applyGapless(next)
         installPlayerListeners(next)
-        // Restores RG onto DynamicsProcessing and returns exo.volume to 1f for DVC.
-        applyReplayGain(next, next.currentMediaItem, eqMain)
+        // If dual CF somehow ran under external-EQ risk (race / gate miss), mute
+        // until settle before RG→1f across outgoing AudioTrack teardown.
+        // Normal dual-CF (no external EQ) restores RG immediately — no promote dip.
+        if (dualPlayerCfBlocked || ExternalEqRisk.isDualPlayerCrossfadeUnsafe(this)) {
+            next.volume = 0f
+            beginMuteUntilBound(next, eqMain, reason = "cf-promote-external-eq")
+        } else {
+            applyReplayGain(next, next.currentMediaItem, eqMain)
+        }
 
         // Retire outgoing off the critical path so AudioTrack teardown cannot glitch
         // the already-audible next track in the same frame as the promote.
@@ -798,6 +883,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         }
         fadePlayer = null
         pendingReady = false
+        pendingReadyAtElapsed = 0L
         pendingNextIndex = C.INDEX_UNSET
     }
 
@@ -847,7 +933,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         settings.clearSleepTimer()
     }
 
-    private fun cancelCrossfade() {
+    private fun cancelCrossfade(restoreVolume: Boolean = true) {
         fadeAnim?.removeAllListeners()
         fadeAnim?.removeAllUpdateListeners()
         fadeAnim?.cancel()
@@ -858,19 +944,62 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         }
         fadePlayer = null
         pendingReady = false
+        pendingReadyAtElapsed = 0L
         pendingNextIndex = C.INDEX_UNSET
         fading = false
         player?.let { exo ->
-            applyReplayGain(exo, exo.currentMediaItem, eqMain)
+            // Skip restore when a mute-until-bound is in flight (playlist/album change)
+            // so we never snap volume=1f before PA EQ has settled.
+            if (restoreVolume && !sessionBindPending) {
+                applyReplayGain(exo, exo.currentMediaItem, eqMain)
+            }
             applyGapless(exo)
+        }
+    }
+
+    /**
+     * Option B gate: dual-ExoPlayer crossfade only when external EQ risk is absent.
+     * Re-check at most every [DUAL_CF_GATE_TTL_MS] so install/uninstall of PA EQ
+     * is picked up without per-tick PackageManager spam.
+     */
+    private fun dualPlayerCrossfadeAllowed(): Boolean {
+        refreshDualPlayerCfGate(force = false)
+        return !dualPlayerCfBlocked
+    }
+
+    private fun refreshDualPlayerCfGate(force: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && dualPlayerCfCheckedAtElapsed != 0L &&
+            now - dualPlayerCfCheckedAtElapsed < DUAL_CF_GATE_TTL_MS
+        ) {
+            return
+        }
+        dualPlayerCfCheckedAtElapsed = now
+        val blocked = ExternalEqRisk.isDualPlayerCrossfadeUnsafe(this)
+        if (blocked != dualPlayerCfBlocked) {
+            Log.i(
+                TAG,
+                "Option B dual-player CF ${if (blocked) "BLOCKED" else "allowed"} " +
+                    "(PA EQ installed=${ExternalEqRisk.isPowerampEqualizerInstalled(this)})",
+            )
+        }
+        dualPlayerCfBlocked = blocked
+        if (blocked && !fading) {
+            releasePendingFadePlayer()
         }
     }
 
     companion object {
         private const val TAG = "Auralis/DvcSession"
         private const val VOLUME_RAMP_MS = 120L
-        /** Settle after OPEN before ramping volume (cold start / unexpected rebind). */
-        private const val SESSION_SETTLE_MS = 80L
+        /** How often to re-query PackageManager for external EQ presence. */
+        private const val DUAL_CF_GATE_TTL_MS = 30_000L
+        /**
+         * After READY / OPEN: hold mute this long so Poweramp EQ can bind on the
+         * sticky session before any audible output (album change / skip / CF).
+         * 80ms was insufficient for OEM AudioTrack recreate under DVC.
+         */
+        private const val SESSION_SETTLE_MS = 250L
         /** How far ahead of the fade window to prepare the next ExoPlayer. */
         private const val PREPARE_LEAD_MS = 8_000L
         /** Transient IO auto-retry after [Player.Listener.onPlayerError]. */

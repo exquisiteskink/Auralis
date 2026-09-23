@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.auralis.music.BuildConfig
 import app.auralis.music.data.player.EqPresets
+import app.auralis.music.data.player.ExternalEqRisk
 import app.auralis.music.data.player.PlayerSettings
 import app.auralis.music.data.player.ReplayGainMode
 import app.auralis.music.ui.components.GlassSurface
@@ -69,6 +70,7 @@ fun SettingsScreen(
     var gapless by remember { mutableStateOf(playerPrefs.gapless) }
     var crossfade by remember { mutableStateOf(playerPrefs.crossfade) }
     var fadeMs by remember { mutableStateOf(playerPrefs.crossfadeMs.toFloat()) }
+    val externalEqDualCfBlocked = remember { ExternalEqRisk.isDualPlayerCrossfadeUnsafe(context) }
     var pauseDisc by remember { mutableStateOf(playerPrefs.pauseOnDisconnect) }
     var sleepMins by remember { mutableStateOf(playerPrefs.sleepTimerMinutes) }
     // PlaybackService clears the timer on fire / seek / new queue; keep the radio in sync.
@@ -185,7 +187,12 @@ fun SettingsScreen(
             )
             ToggleRow(
                 title = "Crossfade",
-                subtitle = if (gapless) "Overlap the end of one track with the start of the next" else "Turn on true gapless to enable crossfade",
+                subtitle = when {
+                    !gapless -> "Turn on true gapless to enable crossfade"
+                    externalEqDualCfBlocked ->
+                        "Poweramp EQ (or similar) detected — dual-player overlap is disabled; gapless single-player transitions stay on"
+                    else -> "Overlap the end of one track with the start of the next"
+                },
                 checked = crossfade,
                 enabled = gapless,
                 onChecked = {
@@ -194,7 +201,7 @@ fun SettingsScreen(
                     playerPrefs.crossfade = it
                 },
             )
-            if (crossfade && gapless) {
+            if (crossfade && gapless && !externalEqDualCfBlocked) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Crossfade length ${PlayerSettings.crossfadeLabel(fadeMs.toInt())}",

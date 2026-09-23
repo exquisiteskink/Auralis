@@ -97,6 +97,7 @@ fun SearchScreen(
     var allGenres by remember { mutableStateOf<List<Genre>>(emptyList()) }
     var recentAlbums by remember { mutableStateOf<List<AlbumID3>>(emptyList()) }
     var songForActions by remember { mutableStateOf<Song?>(null) }
+    var actionSongQueue by remember { mutableStateOf<List<Song>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         allGenres = suspendRunCatching { client.getGenres() }.getOrDefault(emptyList()).filter { it.value.isNotBlank() }
@@ -138,8 +139,9 @@ fun SearchScreen(
 
     val suggestionRows = remember(suggestions, query) {
         if (query.isBlank()) emptyList()
-        else buildSuggestions(suggestions, onArtist, onAlbum) { songs, index ->
-            player.play(songs, index)
+        else buildSuggestions(suggestions, onArtist, onAlbum) { song, songs ->
+            actionSongQueue = songs
+            songForActions = song
         }
     }
 
@@ -272,7 +274,10 @@ fun SearchScreen(
                     itemsIndexed(result.song, key = { i, s -> "${s.id}-$i" }) { _, song ->
                         SongRow(
                             song = song,
-                            onClick = { songForActions = song },
+                            onClick = {
+                                actionSongQueue = result.song
+                                songForActions = song
+                            },
                         )
                     }
                 }
@@ -330,7 +335,7 @@ fun SearchScreen(
                     icon = Icons.Rounded.PlayArrow,
                     label = "Play song",
                     onClick = {
-                        val songs = result.song
+                        val songs = actionSongQueue
                         val index = songs.indexOfFirst { it.id == actionsSong.id }.coerceAtLeast(0)
                         player.play(if (songs.isNotEmpty()) songs else listOf(actionsSong), index)
                         songForActions = null
@@ -428,7 +433,7 @@ private fun buildSuggestions(
     result: SearchResult3,
     onArtist: (String) -> Unit,
     onAlbum: (String) -> Unit,
-    playSongs: (List<Song>, Int) -> Unit,
+    onSong: (Song, List<Song>) -> Unit,
 ): List<SearchSuggestion> {
     val rows = ArrayList<SearchSuggestion>(12)
     result.artist.take(4).forEach { artist ->
@@ -458,7 +463,7 @@ private fun buildSuggestions(
             subtitle = song.artist ?: "Song",
             icon = Icons.Rounded.MusicNote,
             coverArt = song.coverArt,
-            onClick = { playSongs(result.song, index) },
+            onClick = { onSong(song, result.song) },
         )
     }
     return rows.take(10)
