@@ -153,6 +153,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+private fun SessionSplash() {
+    val p = LocalPalette.current
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = p.onBackground)
+    }
+}
+
 private data class Tab(val route: String, val label: String, val icon: Int)
 
 private val tabs = listOf(

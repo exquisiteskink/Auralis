@@ -54,8 +54,14 @@ class AppContainer(context: Context) {
         // Credentials were saved only after a successful login. Prefer the app shell
         // (or a brief splash) over Login while we validate — never loop Login on valid store.
         client.credentials = stored
-        val hasDownloads = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            downloadStore.availableSongs(downloadStore.serverKey(stored)).isNotEmpty()
+        val hasDownloads = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                downloadStore.availableSongs(downloadStore.serverKey(stored)).isNotEmpty()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
         }
         if (hasDownloads) {
             restored = true

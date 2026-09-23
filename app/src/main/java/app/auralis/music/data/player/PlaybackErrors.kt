@@ -7,8 +7,11 @@ import androidx.media3.common.PlaybackException
  * Network / HTTP stream blips are transient; decoder / DRM failures are not.
  */
 internal object PlaybackErrors {
-    fun isTransient(error: PlaybackException): Boolean {
-        when (error.errorCode) {
+    fun isTransient(error: PlaybackException): Boolean =
+        isTransient(error.errorCode, error.errorCodeName, error.cause)
+
+    fun isTransient(errorCode: Int, errorCodeName: String, errorCause: Throwable? = null): Boolean {
+        when (errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
@@ -18,8 +21,8 @@ internal object PlaybackErrors {
             -> return true
         }
         // Media3 names are ERROR_CODE_IO_NETWORK_CONNECTION_*; UI may truncate.
-        if (error.errorCodeName.contains("IO_NETWORK_CONNECTION")) return true
-        var cause: Throwable? = error.cause
+        if (errorCodeName.contains("IO_NETWORK_CONNECTION")) return true
+        var cause: Throwable? = errorCause
         while (cause != null) {
             val name = cause.javaClass.name
             if (name.contains("HttpDataSource") ||
@@ -38,12 +41,15 @@ internal object PlaybackErrors {
     }
 
     /** Short label for mini / NP subtitle (not the raw ERROR_CODE_* name). */
-    fun userMessage(error: PlaybackException): String = when {
-        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
-            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
-            error.errorCodeName.contains("IO_NETWORK_CONNECTION") -> "Connection error"
-        error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server error"
-        error.errorCode == PlaybackException.ERROR_CODE_TIMEOUT -> "Playback timed out"
-        else -> if (isTransient(error)) "Connection error" else "Playback error"
+    fun userMessage(error: PlaybackException): String =
+        userMessage(error.errorCode, error.errorCodeName, error.cause)
+
+    fun userMessage(errorCode: Int, errorCodeName: String, errorCause: Throwable? = null): String = when {
+        errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            errorCodeName.contains("IO_NETWORK_CONNECTION") -> "Connection error"
+        errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server error"
+        errorCode == PlaybackException.ERROR_CODE_TIMEOUT -> "Playback timed out"
+        else -> if (isTransient(errorCode, errorCodeName, errorCause)) "Connection error" else "Playback error"
     }
 }

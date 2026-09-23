@@ -11,64 +11,40 @@ import java.net.UnknownHostException
 class PlaybackErrorsTest {
     @Test
     fun networkCodesAreTransientWithFriendlyLabels() {
-        val failed = PlaybackException(
-            "net",
-            null,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        )
-        assertTrue(PlaybackErrors.isTransient(failed))
-        assertEquals("Connection error", PlaybackErrors.userMessage(failed))
-
-        val timeout = PlaybackException(
-            "timeout",
-            null,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-        )
-        assertTrue(PlaybackErrors.isTransient(timeout))
-        assertEquals("Connection error", PlaybackErrors.userMessage(timeout))
+        val failed = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+        val timeout = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+        assertTrue(PlaybackErrors.isTransient(failed, "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"))
+        assertEquals("Connection error", PlaybackErrors.userMessage(failed, "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"))
+        assertTrue(PlaybackErrors.isTransient(timeout, "ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT"))
+        assertEquals("Connection error", PlaybackErrors.userMessage(timeout, "ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT"))
     }
 
     @Test
     fun httpCauseIsTransientEvenIfCodeGeneric() {
-        val err = PlaybackException(
-            "io",
-            UnknownHostException("music.example"),
-            PlaybackException.ERROR_CODE_UNSPECIFIED,
-        )
-        assertTrue(PlaybackErrors.isTransient(err))
-        assertEquals("Connection error", PlaybackErrors.userMessage(err))
+        val code = PlaybackException.ERROR_CODE_UNSPECIFIED
+        val cause = UnknownHostException("music.example")
+        assertTrue(PlaybackErrors.isTransient(code, "ERROR_CODE_UNSPECIFIED", cause))
+        assertEquals("Connection error", PlaybackErrors.userMessage(code, "ERROR_CODE_UNSPECIFIED", cause))
     }
 
     @Test
     fun decoderFailureIsNotTransient() {
-        val err = PlaybackException(
-            "decode",
-            null,
-            PlaybackException.ERROR_CODE_DECODING_FAILED,
-        )
-        assertFalse(PlaybackErrors.isTransient(err))
-        assertEquals("Playback error", PlaybackErrors.userMessage(err))
+        val code = PlaybackException.ERROR_CODE_DECODING_FAILED
+        assertFalse(PlaybackErrors.isTransient(code, "ERROR_CODE_DECODING_FAILED"))
+        assertEquals("Playback error", PlaybackErrors.userMessage(code, "ERROR_CODE_DECODING_FAILED"))
     }
 
     @Test
     fun nestedSocketTimeoutIsTransient() {
-        val err = PlaybackException(
-            "wrap",
-            RuntimeException(SocketTimeoutException("read")),
-            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-        )
-        assertTrue(PlaybackErrors.isTransient(err))
+        val cause = RuntimeException(SocketTimeoutException("read"))
+        assertTrue(PlaybackErrors.isTransient(PlaybackException.ERROR_CODE_UNSPECIFIED, "ERROR_CODE_UNSPECIFIED", cause))
     }
 
     @Test
     fun errorCodeNameContainingNetworkConnectionIsTransient() {
-        val err = PlaybackException(
-            "net",
-            null,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        )
-        assertTrue(err.errorCodeName.contains("IO_NETWORK_CONNECTION"))
-        assertTrue(PlaybackErrors.isTransient(err))
-        assertEquals("Connection error", PlaybackErrors.userMessage(err))
+        val code = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+        val name = "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"
+        assertTrue(PlaybackErrors.isTransient(code, name))
+        assertEquals("Connection error", PlaybackErrors.userMessage(code, name))
     }
 }

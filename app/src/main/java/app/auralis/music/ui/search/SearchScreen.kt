@@ -326,7 +326,7 @@ fun SearchScreen(
                         fontSize = 13.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 24.dp, bottom = 12.dp),
+                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                     )
                 } else {
                     Spacer(Modifier.height(8.dp))

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.3 — 2026-09-22
+
+### Added
+- Search suggestions from `search3`, recent searches, and song actions for playback or navigation to the artist or album (#28, #29).
+
+### Fixed
+- Wait for saved-session restoration before showing Login; transient server failures retain the signed-in app shell (#27).
+- Recover from transient playback connection errors with retry controls and refreshed stream URLs in the existing queue (#30).
+- Mute during media transitions while the external equalizer binds; disable dual-player crossfade when Poweramp Equalizer or a known external EQ is installed (#31).
+
+### Validation
+- 59 unit tests passed; Android lint reported 0 errors and 18 warnings; debug and release APKs assembled. Device playback and Poweramp Equalizer testing were not performed.
+
 ## 1.3.2 — 2026-09-22
 
 ### Fixed
