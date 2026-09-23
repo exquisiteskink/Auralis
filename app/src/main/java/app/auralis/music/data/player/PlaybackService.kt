@@ -52,6 +52,11 @@ import kotlin.math.abs
  * Mute-until-bound (volume 0 → wait READY → settle → ramp) remains the safety
  * belt on every media transition even with a single player (OEM AudioTrack
  * recreate under sticky id).
+ *
+ * Seek/pause hardening: Media3 [DefaultAudioSink.flush] **releases** the
+ * AudioTrack on every seek. [DvcGuardedPlayer] mutes **before** seek/pause so
+ * the playback-thread message order is volume=0 then flush — listener-only mute
+ * races the recreate. Pause holds mute until resume settle (no unmute while paused).
  */
 @UnstableApi
 class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
@@ -77,6 +82,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     /** True while muted waiting for READY + OPEN settle (any media transition). */
     private var sessionBindPending = false
+    /**
+     * True after user pause/stop under DVC guard: volume stays 0 and settle must
+     * **not** unmute until a later play/resume. Distinct from [sessionBindPending]
+     * so a READY-while-paused settle cannot blast on the next AudioTrack.
+     */
+    private var muteHeldForPause = false
     private var settleRunnable: Runnable? = null
 
     /** Auto-retry after transient IO / network [onPlayerError] (does not rebuild player / sticky id). */
@@ -137,7 +148,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         val app = application as AuralisApp
         val callback = AutoLibraryCallback(app.container, app.container.player)
         libraryCallback = callback
-        session = MediaLibraryService.MediaLibrarySession.Builder(this, exo, callback)
+        val guarded = DvcGuardedPlayer(exo, object : DvcGuardedPlayer.Guard {
+            override fun beforeSeek(reason: String) = onGuardedSeek(exo, reason)
+            override fun beforePause(reason: String) = onGuardedPause(exo, reason)
+            override fun beforePlayOrResume(reason: String) = onGuardedPlayOrResume(exo, reason)
+        })
+        session = MediaLibraryService.MediaLibrarySession.Builder(this, guarded, callback)
             .setId("app.auralis.music.session")
             .setSessionActivity(openApp)
             .setExtras(extras)
@@ -189,7 +205,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             ) {
                 if (player !== exo) return
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    cancelCrossfade(restoreVolume = !sessionBindPending)
+                    // Belt: seeks that bypass DvcGuardedPlayer (internal / retry).
+                    // Primary path mutes in beforeSeek before seekTo is queued.
+                    if (!sessionBindPending && !muteHeldForPause) {
+                        beginMuteUntilBound(exo, eqMain, reason = "discontinuity-seek")
+                    }
+                    cancelCrossfade(restoreVolume = false)
                     cancelSleepFromUser()
                 }
             }
@@ -223,16 +244,25 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (player !== exo) return
-                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
-                    cancelCrossfade(restoreVolume = !sessionBindPending)
-                    // User paused while we were recovering — stop auto-retry.
-                    resetErrorRetry(clearResume = true)
-                }
-                // Resume after pause: if somehow unbound, re-assert mute-until-bound.
-                if (playWhenReady && stickySessionId != 0 &&
-                    exo.audioSessionId != stickySessionId && !sessionBindPending
-                ) {
-                    beginMuteUntilBound(exo, eqMain, reason = "resume-mismatch")
+                if (!playWhenReady) {
+                    // Audio-focus / pauseAtEnd may bypass DvcGuardedPlayer — hold mute.
+                    if (!muteHeldForPause) {
+                        onGuardedPause(exo, "listener-pause:$reason")
+                    } else {
+                        cancelCrossfade(restoreVolume = false)
+                    }
+                    if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                        resetErrorRetry(clearResume = true)
+                    }
+                } else {
+                    // Focus regain / play may bypass guard — arm settle before audible.
+                    if (muteHeldForPause || sessionBindPending || exo.volume < 0.5f) {
+                        onGuardedPlayOrResume(exo, "listener-resume:$reason")
+                    } else if (stickySessionId != 0 &&
+                        exo.audioSessionId != stickySessionId
+                    ) {
+                        beginMuteUntilBound(exo, eqMain, reason = "resume-mismatch")
+                    }
                 }
                 when (sleepState.onPlayWhenReadyChanged(playWhenReady, reason)) {
                     SleepTimerState.Action.Fire -> onSleepTimerFired()
@@ -292,11 +322,19 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 val item = exo.getMediaItemAt(idx)
                 val fresh = refreshMediaItemStreamUri(item)
                 if (fresh.localConfiguration?.uri != item.localConfiguration?.uri) {
+                    // Mute before seek flush (AudioTrack recreate) — does not touch sticky id.
+                    beginMuteUntilBound(exo, eqMain, reason = "error-retry-seek")
                     exo.replaceMediaItem(idx, fresh)
                     exo.seekTo(idx, pos)
                 }
                 exo.prepare()
-                if (play) exo.play()
+                if (play) {
+                    muteHeldForPause = false
+                    if (!sessionBindPending) {
+                        beginMuteUntilBound(exo, eqMain, reason = "error-retry-play")
+                    }
+                    exo.play()
+                }
             }.onFailure { Log.w(TAG, "auto-retry prepare failed", it) }
         }
         errorRetryRunnable = r
@@ -507,10 +545,83 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         }
     }
 
+
+    /**
+     * Called from [DvcGuardedPlayer] **before** seek* is forwarded to ExoPlayer.
+     * Ensures volume=0 is queued on the playback thread ahead of flush/recreate.
+     */
+    private fun onGuardedSeek(exo: ExoPlayer, reason: String) {
+        if (muteHeldForPause) {
+            // Already hard-muted while paused; keep hold, refresh OPEN, no settle.
+            hardMuteNoSettle(exo, eqMain, reason = "seek-while-paused:$reason")
+            cancelCrossfade(restoreVolume = false)
+            return
+        }
+        beginMuteUntilBound(exo, eqMain, reason = "guard-seek:$reason")
+        cancelCrossfade(restoreVolume = false)
+    }
+
+    /**
+     * Mute and **hold** across pause/stop. Settle must not ramp while paused —
+     * resume arms mute-until-bound again.
+     */
+    private fun onGuardedPause(exo: ExoPlayer, reason: String) {
+        Log.i(TAG, "mute-hold-for-pause ($reason) sticky=$stickySessionId")
+        volumeAnim?.cancel()
+        volumeAnim = null
+        settleRunnable?.let { handler.removeCallbacks(it) }
+        settleRunnable = null
+        muteHeldForPause = true
+        sessionBindPending = true
+        exo.volume = 0f
+        fadePlayer?.volume = 0f
+        if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
+            runCatching { exo.setAudioSessionId(stickySessionId) }
+        }
+        val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
+        if (sid != 0) {
+            eqMain.attach(sid, settings)
+            notifyExternalEqSession(sid, open = true)
+        }
+        cancelCrossfade(restoreVolume = false)
+    }
+
+    /**
+     * Resume / play: clear pause-hold and require READY+settle before audible ramp.
+     */
+    private fun onGuardedPlayOrResume(exo: ExoPlayer, reason: String) {
+        if (muteHeldForPause || sessionBindPending || exo.volume < 0.5f) {
+            muteHeldForPause = false
+            beginMuteUntilBound(exo, eqMain, reason = "guard-resume:$reason")
+        }
+    }
+
+    /** Mute + OPEN without arming settle (paused seek / hold paths). */
+    private fun hardMuteNoSettle(exo: ExoPlayer, eq: EqController, reason: String) {
+        Log.i(TAG, "hard-mute-no-settle ($reason) sticky=$stickySessionId")
+        volumeAnim?.cancel()
+        volumeAnim = null
+        settleRunnable?.let { handler.removeCallbacks(it) }
+        settleRunnable = null
+        sessionBindPending = true
+        exo.volume = 0f
+        fadePlayer?.volume = 0f
+        if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
+            runCatching { exo.setAudioSessionId(stickySessionId) }
+        }
+        val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
+        if (sid != 0) {
+            eq.attach(sid, settings)
+            notifyExternalEqSession(sid, open = true)
+        }
+    }
+
     private fun beginMuteUntilBound(exo: ExoPlayer, eq: EqController, reason: String) {
         Log.i(TAG, "mute-until-bound ($reason) sticky=$stickySessionId exoSid=${exo.audioSessionId}")
         volumeAnim?.cancel()
         volumeAnim = null
+        // Seeking/transition while we intend to become audible — drop pause hold.
+        muteHeldForPause = false
         sessionBindPending = true
         // Hard mute immediately — never leave volume=1f across AudioTrack recreate.
         exo.volume = 0f
@@ -526,10 +637,10 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         }
 
         // Do not arm settle until STATE_READY (AudioTrack exists). If already READY
-        // (skip within same decoder), settle after SESSION_SETTLE_MS.
+        // (in-track seek / skip), settle after sessionSettleMs().
         settleRunnable?.let { handler.removeCallbacks(it) }
         settleRunnable = null
-        if (exo.playbackState == Player.STATE_READY) {
+        if (exo.playbackState == Player.STATE_READY && exo.playWhenReady) {
             armSettleAfterReady(exo)
         }
     }
@@ -540,25 +651,44 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
      */
     private fun armSettleAfterReady(exo: ExoPlayer) {
         if (!sessionBindPending || player !== exo) return
+        if (muteHeldForPause) return // never unmute while pause-held
         if (exo.playbackState != Player.STATE_READY) return
+        if (!exo.playWhenReady) return // paused READY — wait for resume path
         settleRunnable?.let { handler.removeCallbacks(it) }
         val token = exo
+        val settleMs = sessionSettleMs()
         val settle = Runnable {
             if (player !== token) return@Runnable
             if (!sessionBindPending) return@Runnable
+            if (muteHeldForPause) {
+                settleRunnable = null
+                return@Runnable
+            }
             // Still not READY (rare race) — wait again.
             if (token.playbackState != Player.STATE_READY) {
                 settleRunnable = null
                 return@Runnable
             }
+            if (!token.playWhenReady) {
+                settleRunnable = null
+                return@Runnable
+            }
             sessionBindPending = false
             settleRunnable = null
-            Log.i(TAG, "settle complete — ramp to RG/DVC target")
+            Log.i(TAG, "settle complete (${settleMs}ms) — ramp to RG/DVC target")
             applyReplayGain(token, token.currentMediaItem, eqMain)
         }
         settleRunnable = settle
-        handler.postDelayed(settle, SESSION_SETTLE_MS)
+        handler.postDelayed(settle, settleMs)
     }
+
+    /** Longer settle when external EQ / PA is installed — seek recreate needs more bind time. */
+    private fun sessionSettleMs(): Long =
+        if (dualPlayerCfBlocked || ExternalEqRisk.isDualPlayerCrossfadeUnsafe(this)) {
+            SESSION_SETTLE_EXTERNAL_EQ_MS
+        } else {
+            SESSION_SETTLE_MS
+        }
 
     /**
      * Prefer DynamicsProcessing input gain for ReplayGain (same platform path as EQ).
@@ -672,7 +802,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         if (remain <= 0 || remain > fade) return
         if (fadePlayer == null || !pendingReady) return
         if (pendingReadyAtElapsed == 0L) return
-        if (SystemClock.elapsedRealtime() - pendingReadyAtElapsed < SESSION_SETTLE_MS) return
+        if (SystemClock.elapsedRealtime() - pendingReadyAtElapsed < sessionSettleMs()) return
         beginCrossfadeRamp(exo, fadeMs = minOf(fade, remain).coerceAtLeast(200L))
     }
 
@@ -746,7 +876,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         if (!pendingReady) {
             pendingReady = true
             pendingReadyAtElapsed = SystemClock.elapsedRealtime()
-            Log.d(TAG, "fade player READY — settle ${SESSION_SETTLE_MS}ms before CF ramp")
+            Log.d(TAG, "fade player READY — settle ${sessionSettleMs()}ms before CF ramp")
         }
     }
 
@@ -920,7 +1050,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         handler.removeCallbacks(sleepFire)
         sleepState.arm(0)
         // Detach the animation callbacks before cancellation: cancel also dispatches end.
-        cancelCrossfade()
+        cancelCrossfade(restoreVolume = false)
+        player?.let { onGuardedPause(it, "sleep-timer") }
         player?.pause()
         settings.clearSleepTimer()
     }
@@ -1000,6 +1131,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
          * 80ms was insufficient for OEM AudioTrack recreate under DVC.
          */
         private const val SESSION_SETTLE_MS = 250L
+        /**
+         * Seek flush always releases AudioTrack (Media3 DefaultAudioSink). PA DVC
+         * needs a longer bind window after recreate than a same-track decoder skip.
+         */
+        private const val SESSION_SETTLE_EXTERNAL_EQ_MS = 450L
         /** How far ahead of the fade window to prepare the next ExoPlayer. */
         private const val PREPARE_LEAD_MS = 8_000L
         /** Transient IO auto-retry after [Player.Listener.onPlayerError]. */
