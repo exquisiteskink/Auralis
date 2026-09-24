@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.4 — 2026-09-23
+
+### Fixed
+- Guard seeks, queue replacement, pause/resume, and error recovery so audio stays muted while a new AudioTrack is prepared for Poweramp Equalizer DVC.
+- Pause at automatic song boundaries when a known external EQ is installed, then advance and resume after the new AudioTrack settles. This introduces a brief gap and disables overlapping crossfade in that mode.
+- Clarify the playback settings when the external EQ safety path is active.
+
+### Validation
+- 59 unit tests passed; Android lint reported 0 errors and 18 warnings; debug and release APKs assembled. Device testing with Poweramp Equalizer DVC was not available in this environment.
+
 ## 1.3.3 — 2026-09-22
 
 ### Added
