@@ -175,7 +175,11 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             ToggleRow(
                 title = "True gapless",
-                subtitle = "Join tracks without a pause using decoder delay/padding",
+                subtitle = if (externalEqDualCfBlocked) {
+                    "External EQ detected — brief mute between tracks protects headphone volume"
+                } else {
+                    "Join tracks without a pause using decoder delay/padding"
+                },
                 checked = gapless,
                 onChecked = {
                     gapless = it
@@ -190,7 +194,7 @@ fun SettingsScreen(
                 subtitle = when {
                     !gapless -> "Turn on true gapless to enable crossfade"
                     externalEqDualCfBlocked ->
-                        "Poweramp EQ (or similar) detected — dual-player overlap is disabled; gapless single-player transitions stay on"
+                        "External EQ detected — overlap is disabled; tracks advance after a brief mute"
                     else -> "Overlap the end of one track with the start of the next"
                 },
                 checked = crossfade,
