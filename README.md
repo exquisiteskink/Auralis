@@ -1,18 +1,18 @@
 # Sonveil
 
-Sonveil (formerly Auralis) is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
+Sonveil is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.3.5** is the current public release under the Auralis name. The Sonveil branding is in development. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.3.6** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
-1. Download `Auralis-1.3.5.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Auralis/releases/latest).
+1. Download `Sonveil-1.3.6.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Sonveil/releases/latest).
 2. On your phone, allow installing from the app you use to open the file.
 3. Open the APK and install.
 
 Android 8.0 (API 26) or later is required. A reachable Navidrome, Subsonic, or OpenSubsonic server is needed to sign in and download music; saved tracks can then play offline.
 
-You can install 1.3.5 over 1.3.4; both APKs use the same signing certificate.
+You can install Sonveil 1.3.6 over Auralis 1.3.5; both APKs use the same Android app ID and signing certificate, so your accounts and downloads remain available.
 
 ## What it does
 

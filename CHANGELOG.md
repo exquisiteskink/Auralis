@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.6 — 2026-09-24
+
+### Changed
+- Rebrand the app as Sonveil with a new adaptive launcher icon and matching legacy icons.
+- Add subtle glass surfaces and blue and amber accents while keeping the existing screen layout.
+- Make the collapsed player opaque, add space above the bottom navigation, and reduce the navigation height.
+- Rename the repository and release downloads to Sonveil. The Android app ID remains `app.auralis.music` for in-place updates and saved data.
+
+### Validation
+- 63 unit tests passed; Android lint reported 0 errors and 18 warnings. The design was reviewed on a Galaxy Z Fold 6, and the collapsed player and navigation spacing were confirmed on-device.
+
 ## 1.3.5 — 2026-09-24
 
 ### Fixed
