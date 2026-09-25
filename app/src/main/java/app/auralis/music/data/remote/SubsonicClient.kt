@@ -86,7 +86,7 @@ class SubsonicClient(
                 if (url.scheme != "https") {
                     throw SubsonicException(
                         41,
-                        "This server needs password auth, which Auralis only sends over HTTPS. Use HTTPS or an API key.",
+                        "This server needs password auth, which Sonveil only sends over HTTPS. Use HTTPS or an API key.",
                     )
                 }
                 val fallback = candidate.copy(authMode = AuthMode.HexPassword)
@@ -324,7 +324,7 @@ class SubsonicClient(
 
     companion object {
         internal const val MAX_RESPONSE_BYTES = 16L * 1024 * 1024
-        const val CLIENT_NAME = "Auralis"
+        const val CLIENT_NAME = "Sonveil"
         const val API_VERSION = "1.16.1"
 
         private val rng = SecureRandom().asKotlinRandom()

@@ -103,7 +103,7 @@ fun LoginScreen() {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Auralis", color = p.onBackground, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text("Sonveil", color = p.onBackground, fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Text(
             "Navidrome · Subsonic · OpenSubsonic",
             color = p.onBackground.copy(alpha = 0.55f),

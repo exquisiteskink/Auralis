@@ -808,8 +808,8 @@ class PlayerController(
             store.playbackUri(store.serverKey(creds), id)
         }
         val extras = android.os.Bundle().apply {
-            putString("app_name", "Auralis")
-            putString("com.android.music.musicsource", "Auralis")
+            putString("app_name", "Sonveil")
+            putString("com.android.music.musicsource", "Sonveil")
             replayGain?.trackGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_TRACK, it) }
             replayGain?.albumGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_ALBUM, it) }
             replayGain?.trackPeak?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_TRACK_PEAK, it) }
@@ -825,8 +825,8 @@ class PlayerController(
                     .setArtist(artist)
                     .setAlbumTitle(album)
                     .setSubtitle(artist)
-                    .setDescription("Auralis")
-                    .setWriter("Auralis")
+                    .setDescription("Sonveil")
+                    .setWriter("Sonveil")
                     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                     .setArtworkUri(art?.let { android.net.Uri.parse(it) })
                     .setExtras(extras)

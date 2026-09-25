@@ -1,8 +1,8 @@
-# Auralis
+# Sonveil
 
-Auralis is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
+Sonveil (formerly Auralis) is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.3.5** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.3.5** is the current public release under the Auralis name. The Sonveil branding is in development. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -22,7 +22,7 @@ You can install 1.3.5 over 1.3.4; both APKs use the same signing certificate.
 - **Album and playlist pages** — cover, play/shuffle, numbered track list, and labeled sections for multi-disc albums. Albums also show the year and record label when supplied by your server.
 - **Search** — artists, albums, songs, and genres, with suggestions and recent searches. Tap a song to play it or open its artist or album.
 - **Now playing** — full-screen player with larger cover art, a close button at the top, a flat seek bar beneath the artwork, and track details and larger playback controls grouped closely below it. Includes album-art color wash, codec / bit depth / sample rate, heart favorites, synced lyrics, and a swipe-up queue. Artwork and sheet transitions are softened. Tap the cover or the lyrics icon. Collapse it to a mini player above the tab bar.
-- **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, 10-band EQ with general presets, pause on headphone/Bluetooth disconnect, lock-screen and notification controls. ReplayGain uses the platform audio-processing path when available. With a known external EQ installed, Auralis keeps the effect session active through normal playback transitions and disables overlapping crossfade.
+- **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, 10-band EQ with general presets, pause on headphone/Bluetooth disconnect, lock-screen and notification controls. ReplayGain uses the platform audio-processing path when available. With a known external EQ installed, Sonveil keeps the effect session active through normal playback transitions and disables overlapping crossfade.
 
 - **Offline downloads** — download albums or playlists, then open Home → Downloads to play saved tracks, including after restarting offline. Settings includes Wi-Fi-only downloads and storage clearing.
 - **Sleep timer** — Settings → Playback offers 15 / 30 / 45 / 60 minutes or the end of the current track.
@@ -32,12 +32,12 @@ Colors on the player and throughout the app are sampled from the current cover (
 
 ## Sign in
 
-Open Auralis and enter:
+Open Sonveil and enter:
 
 - Server URL, for example `https://music.example.com`
 - Username and password, **or** an OpenSubsonic API key
 
-Auralis talks to the OpenSubsonic REST API (`v=1.16.1`). Default auth is a salted token (`t = md5(password + salt)`). If the server returns error 41 (typical for LDAP), it falls back to hex-encoded password **only over HTTPS**. Prefer HTTPS.
+Sonveil talks to the OpenSubsonic REST API (`v=1.16.1`). Default auth is a salted token (`t = md5(password + salt)`). If the server returns error 41 (typical for LDAP), it falls back to hex-encoded password **only over HTTPS**. Prefer HTTPS.
 
 ## Security
 
@@ -46,7 +46,7 @@ Auralis talks to the OpenSubsonic REST API (`v=1.16.1`). Default auth is a salte
 - HTTP is allowed only for LAN hosts (localhost, `.local` / `.lan`, or a private IP). Public servers must use HTTPS.
 - Redirects must keep the same scheme, hostname, and port. Cross-protocol redirects are blocked.
 - TLS uses the system certificate store. Self-signed public certificates are not trusted.
-- Popular tracks and biographies come from *your* server. Auralis does not send artist names to Deezer, MusicBrainz, or Wikipedia.
+- Popular tracks and biographies come from *your* server. Sonveil does not send artist names to Deezer, MusicBrainz, or Wikipedia.
 
 See [REVIEW.md](REVIEW.md) for the security and correctness review behind this release.
 

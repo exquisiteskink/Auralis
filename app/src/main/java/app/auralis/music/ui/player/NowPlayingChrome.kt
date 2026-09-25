@@ -90,6 +90,7 @@ import app.auralis.music.ui.theme.AuralisMotion
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.ui.theme.UltraBlurBackground
+import app.auralis.music.ui.theme.sonveilGlass
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -160,8 +161,7 @@ internal fun LyricsPane(
     }
     Column(
         modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(p.surface.copy(alpha = 0.55f))
+            .sonveilGlass(p, 12.dp)
             .clickable(onClick = onClose)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
@@ -294,7 +294,7 @@ internal fun MiniBar(
     Column(
         modifier
             .fillMaxWidth()
-            .background(p.surface),
+            .sonveilGlass(p, 16.dp),
     ) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(p.onBackground.copy(alpha = 0.12f))) {
             Box(

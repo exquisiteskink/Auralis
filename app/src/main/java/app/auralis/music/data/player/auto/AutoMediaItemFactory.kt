@@ -20,7 +20,7 @@ class AutoMediaItemFactory(
 ) {
     fun root(): MediaItem = folder(
         mediaId = AutoBrowseIds.ROOT,
-        title = "Auralis",
+        title = "Sonveil",
         isPlayable = false,
     )
 
@@ -65,8 +65,8 @@ class AutoMediaItemFactory(
     fun song(song: Song, parentId: String, index: Int): MediaItem {
         val art = client.coverUrl(song.coverArt, 800)
         val extras = Bundle().apply {
-            putString("app_name", "Auralis")
-            putString("com.android.music.musicsource", "Auralis")
+            putString("app_name", "Sonveil")
+            putString("com.android.music.musicsource", "Sonveil")
             if (!parentId.isNullOrBlank()) putString(AutoBrowseIds.EXTRA_PARENT, parentId)
             song.replayGain?.trackGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_TRACK, it) }
             song.replayGain?.albumGain?.takeIf { it.isFinite() }?.let { putFloat(PlayerSettings.EXTRA_RG_ALBUM, it) }
@@ -83,8 +83,8 @@ class AutoMediaItemFactory(
                     .setArtist(song.artist)
                     .setAlbumTitle(song.album)
                     .setSubtitle(song.artist)
-                    .setDescription("Auralis")
-                    .setWriter("Auralis")
+                    .setDescription("Sonveil")
+                    .setWriter("Sonveil")
                     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                     .setIsBrowsable(false)
                     .setIsPlayable(true)
@@ -114,8 +114,8 @@ class AutoMediaItemFactory(
                 MediaMetadata.Builder()
                     .setTitle(title)
                     .setSubtitle(subtitle)
-                    .setDescription("Auralis")
-                    .setWriter("Auralis")
+                    .setDescription("Sonveil")
+                    .setWriter("Sonveil")
                     .setMediaType(mediaType)
                     .setIsBrowsable(true)
                     .setIsPlayable(isPlayable)

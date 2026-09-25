@@ -156,8 +156,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val extras = Bundle().apply {
-            putString("com.android.music.musicsource", "Auralis")
-            putString("app_name", "Auralis")
+            putString("com.android.music.musicsource", "Sonveil")
+            putString("app_name", "Sonveil")
         }
         val app = application as AuralisApp
         val callback = AutoLibraryCallback(app.container, app.container.player)
@@ -537,7 +537,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
      */
     private fun buildPlayer(handleAudioFocus: Boolean = true): ExoPlayer {
         val http = OkHttpDataSource.Factory((application as AuralisApp).container.client.http)
-            .setUserAgent("Auralis/${app.auralis.music.BuildConfig.VERSION_NAME}")
+            .setUserAgent("Sonveil/${app.auralis.music.BuildConfig.VERSION_NAME}")
         val gate = DvcPcmGate { flushed -> handler.post { onPcmGateFlushed(flushed) } }.apply {
             if (dualPlayerCfBlocked) enable() else disable()
         }

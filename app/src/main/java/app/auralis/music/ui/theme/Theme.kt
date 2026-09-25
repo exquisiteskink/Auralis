@@ -3,6 +3,7 @@ package app.auralis.music.ui.theme
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,12 +15,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import app.auralis.music.AppContainer
 import app.auralis.music.data.player.AuralisPalette
 import app.auralis.music.data.player.PlayerController
@@ -165,4 +170,23 @@ fun UltraBlurBackground(modifier: Modifier = Modifier) {
         Box(Modifier.fillMaxSize().background(p.background))
         UltraBlurLayer(p.blurA, p.blurB, p.blurC, p.isDark, Modifier.fillMaxSize())
     }
+}
+
+/** Translucent, edge-lit surface shared by player chrome and settings cards. */
+fun Modifier.sonveilGlass(palette: AuralisPalette, radius: Dp): Modifier {
+    val shape = RoundedCornerShape(radius)
+    val fill = Brush.verticalGradient(
+        listOf(
+            palette.surfaceHigh.copy(alpha = if (palette.isDark) 0.70f else 0.82f),
+            palette.surface.copy(alpha = if (palette.isDark) 0.48f else 0.68f),
+        ),
+    )
+    val edge = Brush.linearGradient(
+        listOf(
+            Color.White.copy(alpha = if (palette.isDark) 0.30f else 0.72f),
+            palette.primary.copy(alpha = 0.13f),
+            Color.White.copy(alpha = if (palette.isDark) 0.08f else 0.22f),
+        ),
+    )
+    return clip(shape).background(fill).border(1.dp, edge, shape)
 }

@@ -328,7 +328,7 @@ fun SettingsScreen(
         }
 
         SettingsGroup("About") {
-            Text("Auralis", color = p.onBackground, fontWeight = FontWeight.SemiBold)
+            Text("Sonveil", color = p.onBackground, fontWeight = FontWeight.SemiBold)
             Text(BuildConfig.VERSION_NAME, color = p.onBackground.copy(alpha = 0.5f), fontSize = 13.sp)
             Text(
                 "A listening app for Navidrome, Subsonic, and OpenSubsonic.",

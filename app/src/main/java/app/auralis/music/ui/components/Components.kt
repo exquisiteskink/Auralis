@@ -70,6 +70,7 @@ import app.auralis.music.data.remote.formatDuration
 import app.auralis.music.ui.theme.LocalClient
 import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
+import app.auralis.music.ui.theme.sonveilGlass
 import coil.compose.AsyncImage
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
@@ -97,8 +98,7 @@ fun GlassSurface(
     val p = LocalPalette.current
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(radius))
-            .background(p.surface.copy(alpha = 0.55f))
+            .sonveilGlass(p, radius)
             .padding(16.dp),
         content = content,
     )
@@ -455,8 +455,7 @@ fun GenreChip(genre: Genre, onClick: () -> Unit, modifier: Modifier = Modifier) 
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,
         modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(p.surfaceHigh.copy(alpha = 0.85f))
+            .sonveilGlass(p, 50.dp)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
     )

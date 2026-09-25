@@ -73,6 +73,7 @@ import app.auralis.music.ui.theme.LocalPalette
 import app.auralis.music.ui.theme.LocalPlayer
 import app.auralis.music.data.player.AuralisPalette
 import app.auralis.music.ui.theme.ThemeMode
+import app.auralis.music.ui.theme.sonveilGlass
 import androidx.compose.runtime.CompositionLocalProvider
 
 class MainActivity : ComponentActivity() {
@@ -215,10 +216,10 @@ private fun AuralisRoot(
                                 translationY = size.height * progress
                                 alpha = 1f - progress
                             }
-                            .background(p.background),
+                            .sonveilGlass(p, 20.dp),
                     ) {
                         NavigationBar(
-                            containerColor = p.background,
+                            containerColor = Color.Transparent,
                             contentColor = p.onBackground,
                             tonalElevation = 0.dp,
                             windowInsets = WindowInsets(0, 0, 0, 0),
@@ -254,7 +255,7 @@ private fun AuralisRoot(
                             Modifier
                                 .fillMaxWidth()
                                 .windowInsetsBottomHeight(WindowInsets.navigationBars)
-                                .background(p.background),
+                                .background(Color.Transparent),
                         )
                     }
                 }
