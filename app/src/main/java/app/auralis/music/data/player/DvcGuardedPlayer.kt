@@ -7,11 +7,11 @@ import androidx.media3.exoplayer.ExoPlayer
 
 /**
  * Intercepts transport that Media3 applies **before** [Player.Listener] callbacks,
- * so we can mute **before** [ExoPlayer.seekTo] / pause hit the playback thread.
+ * so we can close the PCM gate before [ExoPlayer.seekTo] / pause hit the playback thread.
  *
  * Why: Media3 [androidx.media3.exoplayer.audio.DefaultAudioSink.flush] releases the
- * AudioTrack on every seek. With Poweramp EQ DVC, a new track at volume≈1f before
- * PA rebinds is the seek blast. Listener-only mute races the flush.
+ * AudioTrack on every seek. A listener callback comes too late to guard the
+ * AudioTrack recreation under Poweramp EQ DVC.
  *
  * [player] remains the underlying [ExoPlayer] for session/EQ code; the MediaSession
  * is wired to this wrapper.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.5 — 2026-09-24
+
+### Fixed
+- Keep Poweramp Equalizer's DVC session active across Pause, Resume, seeks, skips, and album changes to prevent brief full-volume bursts.
+- Keep ordinary song changes and quick Resume natural while retaining a guarded fallback for cold starts and long pauses.
+- Match Now Playing artwork to the album cover shown on Home and the album page, and retain artwork during song changes to avoid blank flashes.
+
+### Validation
+- 63 unit tests passed; Android lint reported 0 errors and 18 warnings. A Galaxy Z Fold 6 with Poweramp Equalizer DVC enabled had no audible bursts during quick Pause/Resume, seeks, skips, album changes, automatic next, or Resume after a 15-second pause at low speaker volume.
+
 ## 1.3.4 — 2026-09-23
 
 ### Fixed

@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -111,6 +112,7 @@ fun CoverArt(
     corner: Dp = 8.dp,
     fallback: ImageVector = Icons.Rounded.Album,
     imageUrl: String? = null,
+    retainPreviousOnChange: Boolean = false,
 ) {
     val client = LocalClient.current
     val p = LocalPalette.current
@@ -118,6 +120,7 @@ fun CoverArt(
         it.username.isEmpty() && it.password.isEmpty()
     }?.toString() ?: client.coverUrl(coverId, 600)
     val shape = if (corner >= 48.dp) CircleShape else RoundedCornerShape(corner)
+    var previousPainter by remember { mutableStateOf<Painter?>(null) }
     Box(
         modifier
             .clip(shape)
@@ -132,6 +135,8 @@ fun CoverArt(
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                placeholder = if (retainPreviousOnChange) previousPainter else null,
+                onSuccess = { if (retainPreviousOnChange) previousPainter = it.painter },
             )
         }
     }

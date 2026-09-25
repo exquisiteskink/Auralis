@@ -23,9 +23,11 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -38,6 +40,7 @@ import app.auralis.music.R
 import app.auralis.music.data.player.auto.AutoLibraryCallback
 import com.google.common.collect.ImmutableList
 import kotlin.math.abs
+import java.util.IdentityHashMap
 
 /**
  * Playback service with a **sticky lifetime audio session** for Poweramp EQ DVC.
@@ -51,19 +54,19 @@ import kotlin.math.abs
  * the sticky session (gapless / Media3 default transitions). Removes the second
  * AudioTrack / promote-teardown unbound window class.
  *
- * Mute-until-bound (volume 0 → wait READY → settle → ramp) remains the safety
- * belt on every media transition even with a single player (OEM AudioTrack
- * recreate under sticky id).
+ * A decoded PCM gate holds silence through cold AudioTrack binding and recovery,
+ * then ramps samples back in. A silent track holds the external EQ session
+ * across normal pauses and item changes, avoiding repeated DVC rebinding.
  *
- * Seek/pause hardening: Media3 [DefaultAudioSink.flush] **releases** the
- * AudioTrack on every seek. [DvcGuardedPlayer] mutes **before** seek/pause so
- * the playback-thread message order is volume=0 then flush — listener-only mute
- * races the recreate. Pause holds mute until resume settle (no unmute while paused).
+ * Media3 [DefaultAudioSink.flush] releases the AudioTrack on a seek.
+ * [DvcGuardedPlayer] closes the gate before seeks if the anchor is unavailable.
+ * A warm anchor keeps queued audio intact for natural resume and transitions.
  */
 @UnstableApi
 class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPreferenceChangeListener {
     private var player: ExoPlayer? = null
     private var fadePlayer: ExoPlayer? = null
+    private val pcmGates = IdentityHashMap<ExoPlayer, DvcPcmGate>()
     private var session: MediaLibraryService.MediaLibrarySession? = null
     private var libraryCallback: AutoLibraryCallback? = null
     private val eqMain = EqController()
@@ -81,6 +84,8 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     /** Service-lifetime session; 0 only if [AudioManager.generateAudioSessionId] failed. */
     private var stickySessionId = 0
+    private var dvcAnchor: DvcSessionAnchor? = null
+    private val stopDvcAnchor = Runnable { onDvcAnchorGraceExpired() }
 
     /** True while muted waiting for READY + OPEN settle (any media transition). */
     private var sessionBindPending = false
@@ -115,6 +120,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
     private val tick = object : Runnable {
         override fun run() {
+            updateAnchoredSinkPolicy()
             maybeStartCrossfade()
             handler.postDelayed(this, 200)
         }
@@ -137,6 +143,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         // 2) Attach platform EQ/RG on sticky id, then OPEN before any audible output.
         // Cold start stays muted until settle completes (same guard as unexpected rebind).
         attachEq(exo, eqMain, openExternal = true, muteUntilBound = stickySessionId != 0)
+        if (dualPlayerCfBlocked && stickySessionId != 0) {
+            dvcAnchor = DvcSessionAnchor(stickySessionId).also { it.start() }
+        }
 
         val openApp = PendingIntent.getActivity(
             this,
@@ -186,7 +195,11 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 eventTime: AnalyticsListener.EventTime,
                 audioTrackConfig: AudioSink.AudioTrackConfig,
             ) {
-                if (player !== exo || !sessionBindPending) return
+                if (player !== exo) return
+                if (pcmGates[exo]?.isClosed == true && !sessionBindPending) {
+                    beginMuteUntilBound(exo, eqMain, reason = "pcm-gate-new-audiotrack")
+                }
+                if (!sessionBindPending) return
                 if (eventTime.realtimeMs < guardedSeekAtElapsed) return
                 awaitAudioTrackInitialization = false
                 armSettleAfterReady(exo)
@@ -202,6 +215,10 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 // Skip/album/auto: mute before any RG→volume=1f. CF promote uses
                 // finishCrossfade (no transition on the promoted player).
                 if (fading) return
+                if (canContinueThroughAnchoredTransition(exo)) {
+                    applyReplayGain(exo, mediaItem, eqMain)
+                    return
+                }
                 if (muteHeldForPause || !exo.playWhenReady) {
                     hardMuteNoSettle(exo, eqMain, reason = transitionMuteReason(reason))
                 } else {
@@ -223,7 +240,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
                     // Belt: seeks that bypass DvcGuardedPlayer (internal / retry).
                     // Primary path mutes in beforeSeek before seekTo is queued.
-                    if (!sessionBindPending && !muteHeldForPause) {
+                    if (!sessionBindPending && !muteHeldForPause &&
+                        !canContinueThroughAnchoredTransition(exo)
+                    ) {
                         beginMuteUntilBound(exo, eqMain, reason = "discontinuity-seek")
                     }
                     cancelCrossfade(restoreVolume = false)
@@ -236,7 +255,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
                 if (reason != Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) return
                 // Album change / setMediaItems: mute FIRST so cancelCrossfade cannot
                 // applyReplayGain→volume=1f while the new AudioTrack is unbound.
-                if (muteHeldForPause || !exo.playWhenReady) {
+                if (canContinueThroughAnchoredTransition(exo)) {
+                    applyReplayGain(exo, exo.currentMediaItem, eqMain)
+                } else if (muteHeldForPause || !exo.playWhenReady) {
                     hardMuteNoSettle(exo, eqMain, reason = "playlist-changed")
                 } else {
                     beginMuteUntilBound(exo, eqMain, reason = "playlist-changed")
@@ -430,7 +451,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun onPrimarySessionIdChanged(exo: ExoPlayer, audioSessionId: Int) {
         if (stickySessionId != 0 && audioSessionId == stickySessionId) {
             // Confirm sticky; keep EQ attached; do NOT CLOSE/OPEN.
-            if (eqMain.audioSessionId != stickySessionId) {
+            if (!dualPlayerCfBlocked && eqMain.audioSessionId != stickySessionId) {
                 eqMain.attach(stickySessionId, settings)
             }
             if (lastNotifiedSessionId != stickySessionId) {
@@ -477,6 +498,9 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(sleepFire)
+        handler.removeCallbacks(stopDvcAnchor)
+        dvcAnchor?.stop()
+        dvcAnchor = null
         settleRunnable?.let { handler.removeCallbacks(it) }
         settleRunnable = null
         resetErrorRetry(clearResume = true)
@@ -497,6 +521,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             release()
         }
         fadePlayer?.release()
+        pcmGates.clear()
         eqMain.release()
         eqFade.release()
         session = null
@@ -513,7 +538,21 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
     private fun buildPlayer(handleAudioFocus: Boolean = true): ExoPlayer {
         val http = OkHttpDataSource.Factory((application as AuralisApp).container.client.http)
             .setUserAgent("Auralis/${app.auralis.music.BuildConfig.VERSION_NAME}")
-        val exo = ExoPlayer.Builder(this)
+        val gate = DvcPcmGate { flushed -> handler.post { onPcmGateFlushed(flushed) } }.apply {
+            if (dualPlayerCfBlocked) enable() else disable()
+        }
+        val renderers = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setAudioProcessors(arrayOf(gate))
+                .setEnableFloatOutput(false)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .build()
+        }
+        val exo = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(this)
                     .setDataSourceFactory(DefaultDataSource.Factory(this, http)),
@@ -530,11 +569,20 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             .setHandleAudioBecomingNoisy(settings.pauseOnDisconnect)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        pcmGates[exo] = gate
         if (stickySessionId != 0) {
             exo.setAudioSessionId(stickySessionId)
             Log.d(TAG, "setAudioSessionId($stickySessionId) on new ExoPlayer")
         }
         return exo
+    }
+
+    private fun onPcmGateFlushed(gate: DvcPcmGate) {
+        val exo = player ?: return
+        if (pcmGates[exo] !== gate || !gate.isClosed || sessionBindPending) return
+        // A sink flush can bypass controller and player callbacks. Keep the PCM
+        // gate shut and re-arm settling even when no user seek was observed.
+        beginMuteUntilBound(exo, eqMain, reason = "pcm-gate-flush")
     }
 
     private fun mediaAudioAttributes(): AudioAttributes =
@@ -543,11 +591,26 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
+    private fun updateAnchoredSinkPolicy() {
+        val exo = player ?: return
+        val gate = pcmGates[exo] ?: return
+        val keepOpen = dualPlayerCfBlocked && dvcAnchor?.isWarm == true &&
+            !gate.isClosed && !sessionBindPending
+        if (gate.keepOpenOnFlush == keepOpen) return
+        gate.setKeepOpenOnFlush(keepOpen)
+        applyGapless(exo)
+    }
+
+    private fun canContinueThroughAnchoredTransition(exo: ExoPlayer): Boolean =
+        player === exo && exo.playWhenReady && !muteHeldForPause &&
+            !sessionBindPending && pcmGates[exo]?.keepOpenOnFlush == true
+
     private fun applyGapless(exo: ExoPlayer) {
-        // Under an external EQ, pause before the playback thread can render the
-        // next item's AudioTrack. The END callback advances it while hard-muted.
+        // A warm anchor keeps DVC bound while Media3 advances the queue. If the
+        // anchor is unavailable, pause at end and advance through the PCM gate.
         exo.pauseAtEndOfMediaItems = sleepState.endOfTrack ||
-            (fading && player === exo) || (dualPlayerCfBlocked && player === exo)
+            (fading && player === exo) ||
+            (dualPlayerCfBlocked && player === exo && pcmGates[exo]?.keepOpenOnFlush != true)
         exo.skipSilenceEnabled = false
     }
 
@@ -577,7 +640,16 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             else -> exo.audioSessionId
         }
         if (sid == 0) {
-            eq.attach(exo.audioSessionId, settings)
+            if (!dualPlayerCfBlocked) eq.attach(exo.audioSessionId, settings)
+            return
+        }
+
+        if (dualPlayerCfBlocked) {
+            eq.release()
+            if (eq === eqMain && openExternal) notifyExternalEqSession(sid, open = true)
+            if (muteUntilBound && eq === eqMain) {
+                beginMuteUntilBound(exo, eq, reason = "cold-or-rebind")
+            }
             return
         }
 
@@ -605,10 +677,17 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
 
 
     /**
-     * Called from [DvcGuardedPlayer] **before** seek* is forwarded to ExoPlayer.
-     * Ensures volume=0 is queued on the playback thread ahead of flush/recreate.
+     * Called from [DvcGuardedPlayer] before seek is forwarded to ExoPlayer.
+     * Close the PCM gate before the playback thread flushes its AudioTrack.
      */
     private fun onGuardedSeek(exo: ExoPlayer, reason: String) {
+        if (canContinueThroughAnchoredTransition(exo)) {
+            cancelCrossfade(restoreVolume = false)
+            cancelSleepFromUser()
+            Log.i(TAG, "anchor-held transition ($reason) sticky=$stickySessionId")
+            return
+        }
+        pcmGates[exo]?.close()
         awaitAudioTrackInitialization = true
         guardedSeekAtElapsed = SystemClock.elapsedRealtime()
         if (muteHeldForPause) {
@@ -621,11 +700,12 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         cancelCrossfade(restoreVolume = false)
     }
 
-    /**
-     * Mute and **hold** across pause/stop. Settle must not ramp while paused —
-     * resume arms mute-until-bound again.
-     */
+    /** Keep a warm anchored pause seamless; otherwise hold mute for a guarded resume. */
     private fun onGuardedPause(exo: ExoPlayer, reason: String) {
+        if (dualPlayerCfBlocked) {
+            handler.removeCallbacks(stopDvcAnchor)
+            handler.postDelayed(stopDvcAnchor, DVC_ANCHOR_PAUSE_GRACE_MS)
+        }
         Log.i(TAG, "mute-hold-for-pause ($reason) sticky=$stickySessionId")
         pauseGeneration++
         volumeAnim?.cancel()
@@ -633,67 +713,103 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
         settleRunnable?.let { handler.removeCallbacks(it) }
         settleRunnable = null
         muteHeldForPause = true
+        if (dualPlayerCfBlocked && dvcAnchor?.isWarm == true && !sessionBindPending) {
+            // Keep buffered samples intact so a quick resume is seamless. The
+            // continuously playing silent track holds the DVC session active.
+            cancelCrossfade(restoreVolume = false)
+            return
+        }
+        pcmGates[exo]?.close()
         sessionBindPending = true
-        exo.volume = 0f
-        fadePlayer?.volume = 0f
+        if (!dualPlayerCfBlocked) {
+            exo.volume = 0f
+            fadePlayer?.volume = 0f
+        }
         if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
             runCatching { exo.setAudioSessionId(stickySessionId) }
         }
         val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
         if (sid != 0) {
-            eqMain.attach(sid, settings)
+            if (!dualPlayerCfBlocked) eqMain.attach(sid, settings)
             notifyExternalEqSession(sid, open = true)
         }
         cancelCrossfade(restoreVolume = false)
     }
 
-    /**
-     * Resume / play: clear pause-hold and require READY+settle before audible ramp.
-     */
+    /** Resume directly from a warm anchored pause, or settle after a guarded pause. */
     private fun onGuardedPlayOrResume(exo: ExoPlayer, reason: String) {
+        handler.removeCallbacks(stopDvcAnchor)
+        if (muteHeldForPause && !sessionBindPending && dualPlayerCfBlocked &&
+            dvcAnchor?.isWarm == true
+        ) {
+            muteHeldForPause = false
+            Log.i(TAG, "anchor-held resume without AudioTrack reset ($reason)")
+            return
+        }
+        dvcAnchor?.start()
         if (muteHeldForPause || sessionBindPending || exo.volume < 0.5f) {
             muteHeldForPause = false
             beginMuteUntilBound(exo, eqMain, reason = "guard-resume:$reason")
         }
     }
 
+    private fun onDvcAnchorGraceExpired() {
+        val exo = player
+        if (exo != null && !exo.playWhenReady && muteHeldForPause && dualPlayerCfBlocked) {
+            // After a long pause, close the gate and mute the dormant track while
+            // the silent anchor still holds the DVC session. Resume takes the
+            // normal bind path, so releasing this last active track is inaudible.
+            pcmGates[exo]?.close()
+            pcmGates[exo]?.setKeepOpenOnFlush(false)
+            exo.volume = 0f
+            sessionBindPending = true
+        }
+        dvcAnchor?.stop()
+    }
+
     /** Mute + OPEN without arming settle (paused seek / hold paths). */
     private fun hardMuteNoSettle(exo: ExoPlayer, eq: EqController, reason: String) {
+        pcmGates[exo]?.close()
         Log.i(TAG, "hard-mute-no-settle ($reason) sticky=$stickySessionId")
         volumeAnim?.cancel()
         volumeAnim = null
         settleRunnable?.let { handler.removeCallbacks(it) }
         settleRunnable = null
         sessionBindPending = true
-        exo.volume = 0f
-        fadePlayer?.volume = 0f
+        if (!dualPlayerCfBlocked) {
+            exo.volume = 0f
+            fadePlayer?.volume = 0f
+        }
         if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
             runCatching { exo.setAudioSessionId(stickySessionId) }
         }
         val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
         if (sid != 0) {
-            eq.attach(sid, settings)
+            if (!dualPlayerCfBlocked) eq.attach(sid, settings)
             notifyExternalEqSession(sid, open = true)
         }
     }
 
     private fun beginMuteUntilBound(exo: ExoPlayer, eq: EqController, reason: String) {
+        pcmGates[exo]?.close()
         Log.i(TAG, "mute-until-bound ($reason) sticky=$stickySessionId exoSid=${exo.audioSessionId}")
         volumeAnim?.cancel()
         volumeAnim = null
         // Seeking/transition while we intend to become audible — drop pause hold.
         muteHeldForPause = false
         sessionBindPending = true
-        // Hard mute immediately — never leave volume=1f across AudioTrack recreate.
-        exo.volume = 0f
-        fadePlayer?.volume = 0f
+        // AudioTrack gain stays steady under DVC; decoded PCM supplies the mute.
+        if (!dualPlayerCfBlocked) {
+            exo.volume = 0f
+            fadePlayer?.volume = 0f
+        }
 
         if (stickySessionId != 0 && exo.audioSessionId != stickySessionId) {
             runCatching { exo.setAudioSessionId(stickySessionId) }
         }
         val sid = if (stickySessionId != 0) stickySessionId else exo.audioSessionId
         if (sid != 0) {
-            eq.attach(sid, settings)
+            if (!dualPlayerCfBlocked) eq.attach(sid, settings)
             notifyExternalEqSession(sid, open = true)
         }
 
@@ -741,6 +857,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             settleRunnable = null
             Log.i(TAG, "settle complete (${settleMs}ms) — ramp to RG/DVC target")
             applyReplayGain(token, token.currentMediaItem, eqMain)
+            pcmGates[token]?.open()
         }
         settleRunnable = settle
         handler.postDelayed(settle, settleMs)
@@ -767,6 +884,14 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             settings.replayGainMode,
             settings.peakLimiter,
         )
+        if (dualPlayerCfBlocked) {
+            // Poweramp owns the session's platform effects and DVC gain. Keep
+            // our ReplayGain in decoded PCM. A long pause may have muted the
+            // dormant AudioTrack before releasing the session anchor.
+            pcmGates[exo]?.setReplayGain(replayGainToPlayerVolume(rgLinear))
+            if (exo.volume < 0.99f) setPlayerVolumeSmooth(exo, 1f)
+            return
+        }
         val viaEffect = eq.applyReplayGainLinear(rgLinear, settings)
         if (viaEffect) {
             // DVC path: target AudioTrack volume = unity. Never hard-snap from a
@@ -1180,6 +1305,22 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
             )
         }
         dualPlayerCfBlocked = blocked
+        if (blocked != wasBlocked) {
+            pcmGates.values.forEach { gate -> if (blocked) gate.enable() else gate.disable() }
+            if (blocked) {
+                if (stickySessionId != 0) {
+                    dvcAnchor = DvcSessionAnchor(stickySessionId).also { it.start() }
+                }
+                eqMain.release()
+                eqFade.release()
+                player?.let { beginMuteUntilBound(it, eqMain, reason = "external-eq-installed") }
+            } else {
+                handler.removeCallbacks(stopDvcAnchor)
+                dvcAnchor?.stop()
+                dvcAnchor = null
+                player?.let { attachEq(it, eqMain, openExternal = true, muteUntilBound = false) }
+            }
+        }
         if (blocked != wasBlocked) player?.let(::applyGapless)
         if (blocked) {
             if (fading) {
@@ -1207,6 +1348,7 @@ class PlaybackService : MediaLibraryService(), SharedPreferences.OnSharedPrefere
          * needs a longer bind window after recreate than a same-track decoder skip.
          */
         private const val SESSION_SETTLE_EXTERNAL_EQ_MS = 450L
+        private const val DVC_ANCHOR_PAUSE_GRACE_MS = 15_000L
         /** How far ahead of the fade window to prepare the next ExoPlayer. */
         private const val PREPARE_LEAD_MS = 8_000L
         /** Transient IO auto-retry after [Player.Listener.onPlayerError]. */

@@ -218,7 +218,7 @@ internal fun QueuePage(
             IconButton(onClick = onClose) {
                 Icon(Icons.Rounded.KeyboardArrowDown, "Back", tint = p.onBackground)
             }
-            CoverArt(song.coverArt, Modifier.size(44.dp), song.title, corner = 4.dp)
+            CoverArt(ui.currentCoverArt, Modifier.size(44.dp), song.title, corner = 4.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
@@ -308,14 +308,13 @@ internal fun MiniBar(
             Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Crossfade(
-                targetState = song.coverArt,
-                animationSpec = AuralisMotion.emphasized(AuralisMotion.DurationArtMs),
-                label = "mini-cover",
-                modifier = Modifier.size(44.dp),
-            ) { coverId ->
-                CoverArt(coverId, Modifier.fillMaxSize(), song.title, corner = 2.dp)
-            }
+            CoverArt(
+                ui.currentCoverArt,
+                Modifier.size(44.dp),
+                song.title,
+                corner = 2.dp,
+                retainPreviousOnChange = true,
+            )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(song.title, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)

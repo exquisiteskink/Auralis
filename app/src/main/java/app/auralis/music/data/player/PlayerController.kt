@@ -48,8 +48,14 @@ data class PlayerUiState(
     val upcomingIndices: List<Int>? = null,
     val playbackError: String? = null,
     val lyrics: SongLyrics? = null,
+    val artworkSongId: String? = null,
+    val artworkCoverId: String? = null,
 ) {
     val current: Song? get() = queue.getOrNull(index)
+    val currentCoverArt: String?
+        get() = current?.let { song ->
+            if (artworkSongId == song.id) artworkCoverId ?: song.coverArt else song.coverArt
+        }
     val upNextIndices: List<Int> get() = upcomingIndices ?: ((index + 1) until queue.size).toList()
     val upNext: List<Song> get() = upNextIndices.mapNotNull(queue::getOrNull)
     fun isFavorite(song: Song): Boolean = favoriteById[song.id] ?: song.isFavorite
@@ -82,6 +88,7 @@ class PlayerController(
     private var controller: MediaController? = null
     private var connection: ListenableFuture<MediaController>? = null
     private var artworkJob: Job? = null
+    private val albumCoverCache = mutableMapOf<String, String>()
     private val favoriteInFlight = mutableSetOf<String>()
     private var positionJob: Job? = null
     private var scrobbledId: String? = null
@@ -206,6 +213,7 @@ class PlayerController(
     fun stopAndReset() {
         scope.coroutineContext.cancelChildren()
         artworkJob = null
+        albumCoverCache.clear()
         favoriteInFlight.clear()
         connection?.let { MediaController.releaseFuture(it) }
         connection = null
@@ -651,27 +659,42 @@ class PlayerController(
 
     private fun refreshArtwork(song: Song) {
         artworkJob?.cancel()
-        resetPalette()
+        _state.update { it.copy(artworkSongId = song.id, artworkCoverId = song.coverArt) }
         artworkJob = scope.launch {
-            try {
-                loadArtwork(song)
+            val coverId = song.albumId?.let { albumId ->
+                albumCoverCache[albumId] ?: try {
+                    client.getAlbum(albumId).coverArt?.also { albumCoverCache[albumId] = it }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: song.coverArt
+            if (_state.value.current?.id != song.id) return@launch
+            _state.update { it.copy(artworkSongId = song.id, artworkCoverId = coverId) }
+            val palette = try {
+                loadArtwork(coverId)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                // Missing or malformed artwork must never crash audio playback.
+                null // Missing or malformed artwork must never crash playback.
+            }
+            if (_state.value.current?.id == song.id) {
+                if (palette == null) resetPalette()
+                else _state.update { it.copy(palette = palette) }
             }
         }
     }
 
-    private suspend fun loadArtwork(song: Song) {
-        val url = client.coverUrl(song.coverArt, 800) ?: return
+    private suspend fun loadArtwork(coverId: String?): AuralisPalette? {
+        val url = client.coverUrl(coverId, 800) ?: return null
         val req = ImageRequest.Builder(context).data(url).size(800).allowHardware(false).build()
         val result = context.imageLoader.execute(req)
         if (result is SuccessResult) {
-            val bmp = (result.drawable as? BitmapDrawable)?.bitmap ?: return
-            val palette = withContext(Dispatchers.Default) { PaletteExtractor.from(bmp, preferDark) }
-            if (_state.value.current?.id == song.id) _state.update { it.copy(palette = palette) }
+            val bmp = (result.drawable as? BitmapDrawable)?.bitmap ?: return null
+            return withContext(Dispatchers.Default) { PaletteExtractor.from(bmp, preferDark) }
         }
+        return null
     }
 
 
@@ -770,8 +793,11 @@ class PlayerController(
         if (st.queue.isEmpty() || client.credentials == null) return
         if (c.mediaItemCount == 0) return
         val current = c.currentMediaItemIndex.coerceAtLeast(0)
-        for (i in (current + 1) until minOf(st.queue.size, c.mediaItemCount)) {
-            runCatching { c.replaceMediaItem(i, st.queue[i].toMediaItem()) }
+        val first = current + 1
+        val end = minOf(st.queue.size, c.mediaItemCount)
+        if (first < end) {
+            val upcoming = (first until end).map { st.queue[it].toMediaItem() }
+            runCatching { c.replaceMediaItems(first, end, upcoming) }
         }
     }
 

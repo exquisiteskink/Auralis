@@ -322,22 +322,16 @@ private fun NowPlayingPage(
                         onClose = { showLyrics = false },
                     )
                 } else {
-                    Crossfade(
-                        targetState = song.coverArt,
-                        animationSpec = AuralisMotion.emphasized(AuralisMotion.DurationArtMs),
-                        label = "np-cover",
-                        modifier = Modifier.fillMaxSize(),
-                    ) { coverId ->
-                        CoverArt(
-                            coverId = coverId,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .shadow(22.dp, RoundedCornerShape(14.dp))
-                                .clickable { showLyrics = true },
-                            contentDescription = song.title,
-                            corner = 14.dp,
-                        )
-                    }
+                    CoverArt(
+                        coverId = ui.currentCoverArt,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .shadow(22.dp, RoundedCornerShape(14.dp))
+                            .clickable { showLyrics = true },
+                        contentDescription = song.title,
+                        corner = 14.dp,
+                        retainPreviousOnChange = true,
+                    )
                 }
             }
 
