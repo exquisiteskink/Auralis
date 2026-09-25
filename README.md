@@ -2,17 +2,17 @@
 
 Sonveil is an Android music player for **Navidrome**, **Subsonic**, and **OpenSubsonic** servers. It is built for people who keep their own library: original-file streaming, a player that follows the album art, and a layout that stays out of the way of the music.
 
-**Version 1.3.7** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
+**Version 1.3.8** is the current public release. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
-1. Download `Sonveil-1.3.7.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Sonveil/releases/latest).
+1. Download `Sonveil-1.3.8.apk` from the [latest GitHub Release](https://github.com/exquisiteskink/Sonveil/releases/latest).
 2. On your phone, allow installing from the app you use to open the file.
 3. Open the APK and install.
 
 Android 8.0 (API 26) or later is required. A reachable Navidrome, Subsonic, or OpenSubsonic server is needed to sign in and download music; saved tracks can then play offline.
 
-You can install Sonveil 1.3.7 over Sonveil 1.3.6 or Auralis 1.3.5; these APKs use the same Android app ID and signing certificate, so your accounts and downloads remain available.
+The Android package is `app.sonveil.music`. A build from this tree does not replace an install of Sonveil 1.3.7 or Auralis, which used `app.auralis.music`. Sign in again on the new package. Accounts and downloads stay in the older app until you remove it.
 
 ## What it does
 
@@ -22,7 +22,7 @@ You can install Sonveil 1.3.7 over Sonveil 1.3.6 or Auralis 1.3.5; these APKs us
 - **Album and playlist pages** — cover, play/shuffle, numbered track list, and labeled sections for multi-disc albums. Albums also show the year and record label when supplied by your server.
 - **Search** — artists, albums, songs, and genres, with suggestions and recent searches. Tap a song to play it or open its artist or album.
 - **Now playing** — full-screen player with larger cover art, a close button at the top, a flat seek bar beneath the artwork, and track details and larger playback controls grouped closely below it. Includes album-art color wash, codec / bit depth / sample rate, heart favorites, synced lyrics, and a swipe-up queue. Artwork and sheet transitions are softened. Tap the cover or the lyrics icon. Collapse it to a mini player above the tab bar.
-- **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, 10-band EQ with general presets, pause on headphone/Bluetooth disconnect, lock-screen and notification controls. ReplayGain uses the platform audio-processing path when available. With a known external EQ installed, Sonveil keeps the effect session active through normal playback transitions and disables overlapping crossfade.
+- **Playback** — Media3 ExoPlayer, original streams by default, optional transcode, ReplayGain/R128 with peak limiting, true gapless, optional crossfade, a vertical 10-band equalizer and a parametric equalizer with preamp and AutoEQ headphone profiles, pause on headphone/Bluetooth disconnect, lock-screen and notification controls. ReplayGain uses the platform audio-processing path when available. With a known external EQ installed, Sonveil keeps the effect session active through normal playback transitions and disables overlapping crossfade.
 
 - **Offline downloads** — download albums or playlists, then open Home → Downloads to play saved tracks, including after restarting offline. Settings includes Wi-Fi-only downloads and storage clearing.
 - **Sleep timer** — Settings → Playback offers 15 / 30 / 45 / 60 minutes or the end of the current track.

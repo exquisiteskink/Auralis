@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.8 — 2026-09-25
+
+### Changed
+- Identify the app as Sonveil everywhere, including the Android package `app.sonveil.music` and the application label. This does not replace an install of 1.3.7 or earlier, which used `app.auralis.music`.
+- Replace the genre equalizer presets with a vertical 10-band equalizer and a parametric equalizer. Both include a preamp.
+- Add AutoEQ headphone search (8,849 measurements). The chosen curve is saved for the connected output and restored when that output connects.
+- Browse the full album list, open all favorites, and load more search results.
+- Resume an offline download after Wi-Fi returns or the app restarts, and continue past a single failed track.
+
+### Fixed
+- Stop playback from dying in the equalizer with `The source buffer is this buffer`.
+- Stop inserting a fade-in on every track change when no external equalizer is installed.
+- Keep the sleep timer across seek and automatic track changes.
+- Open an artist’s full album grid without crashing.
+
+### Validation
+- Unit tests passed. A debug build on a Galaxy Z Fold 6 loaded 8,849 AutoEQ measurements and played without the equalizer runtime error.
+
 ## 1.3.7 — 2026-09-25
 
 ### Fixed

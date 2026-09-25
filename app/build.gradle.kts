@@ -6,15 +6,15 @@ plugins {
 }
 
 android {
-    namespace = "app.auralis.music"
+    namespace = "app.sonveil.music"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.auralis.music"
+        applicationId = "app.sonveil.music"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.3.7"
+        versionCode = 28
+        versionName = "1.3.8"
         vectorDrawables.useSupportLibrary = true
     }
 
