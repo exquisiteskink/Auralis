@@ -173,12 +173,16 @@ fun UltraBlurBackground(modifier: Modifier = Modifier) {
 }
 
 /** Translucent, edge-lit surface shared by player chrome and settings cards. */
-fun Modifier.sonveilGlass(palette: AuralisPalette, radius: Dp): Modifier {
+fun Modifier.sonveilGlass(
+    palette: AuralisPalette,
+    radius: Dp,
+    opaque: Boolean = false,
+): Modifier {
     val shape = RoundedCornerShape(radius)
     val fill = Brush.verticalGradient(
         listOf(
-            palette.surfaceHigh.copy(alpha = if (palette.isDark) 0.70f else 0.82f),
-            palette.surface.copy(alpha = if (palette.isDark) 0.48f else 0.68f),
+            palette.surfaceHigh.copy(alpha = if (opaque) 1f else if (palette.isDark) 0.70f else 0.82f),
+            palette.surface.copy(alpha = if (opaque) 1f else if (palette.isDark) 0.48f else 0.68f),
         ),
     )
     val edge = Brush.linearGradient(

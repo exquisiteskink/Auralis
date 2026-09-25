@@ -195,7 +195,7 @@ fun NowPlayingHost(
             position = position,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = if (bottomNavVisible) 80.dp else 0.dp)
+                .padding(start = 12.dp, end = 12.dp, bottom = if (bottomNavVisible) 64.dp else 12.dp)
                 .navigationBarsPadding()
                 .graphicsLayer {
                     // Fade/slide mini away as NP rises — avoids hard cut under the sheet.

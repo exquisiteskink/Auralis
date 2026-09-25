@@ -294,7 +294,7 @@ internal fun MiniBar(
     Column(
         modifier
             .fillMaxWidth()
-            .sonveilGlass(p, 16.dp),
+            .sonveilGlass(p, 16.dp, opaque = true),
     ) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(p.onBackground.copy(alpha = 0.12f))) {
             Box(
