@@ -13,8 +13,8 @@ android {
         applicationId = "app.auralis.music"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.3.6"
+        versionCode = 27
+        versionName = "1.3.7"
         vectorDrawables.useSupportLibrary = true
     }
 

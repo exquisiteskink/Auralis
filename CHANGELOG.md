@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.7 — 2026-09-25
+
+### Fixed
+- Restore clean playback and Pause with Poweramp Equalizer DVC on the Galaxy Z Fold 6. Keep the existing Poweramp-facing Android application label while the launcher and media session identify as Sonveil.
+
+### Validation
+- The pre-rebrand Auralis 1.3.5 APK and the Sonveil fix were compared on the same Fold 6. The final Sonveil build played and paused cleanly in five low-volume checks without a burst or repeated audio.
+
 ## 1.3.6 — 2026-09-24
 
 ### Changed
