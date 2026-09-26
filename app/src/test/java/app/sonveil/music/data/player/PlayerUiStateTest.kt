@@ -3,8 +3,19 @@ package app.sonveil.music.data.player
 import app.sonveil.music.data.remote.Song
 import org.junit.Assert.*
 import org.junit.Test
+import kotlin.random.Random
 
 class PlayerUiStateTest {
+    @Test fun shuffleMovesCurrentToTopAndKeepsEveryQueueEntry() {
+        val songs = listOf(Song("a"), Song("b"), Song("a"), Song("c"))
+        val shuffled = shuffledQueueFromCurrent(songs, 2, Random(17))
+
+        assertSame(songs[2], shuffled.first())
+        assertEquals(songs.size, shuffled.size)
+        assertEquals(songs.indices.toList(), shuffled.map { song -> songs.indexOfFirst { it === song } }.sorted())
+        assertEquals(shuffled.drop(1), PlayerUiState(queue = shuffled, shuffle = true).upNext)
+    }
+
     @Test fun shuffledQueueKeepsActualIndicesIncludingDuplicateSongs() {
         val songs = listOf(Song("a"), Song("b"), Song("a"), Song("c"))
         val state = PlayerUiState(queue = songs, index = 1, shuffle = true, upcomingIndices = listOf(3, 0, 2))

@@ -44,7 +44,7 @@ import app.sonveil.music.ui.components.ArtistTile
 import app.sonveil.music.ui.components.ErrorText
 import app.sonveil.music.ui.components.GenreChip
 import app.sonveil.music.ui.components.HorizontalAlbums
-import app.sonveil.music.ui.components.PlaylistCard
+import app.sonveil.music.ui.components.PlaylistChip
 import app.sonveil.music.ui.components.SectionHeader
 import app.sonveil.music.ui.components.SongRow
 import app.sonveil.music.ui.theme.LocalClient
@@ -126,23 +126,6 @@ fun HomeScreen(
         }
     }
 
-    // Continue: current queue album, else first recently played — no new API.
-    val continueAlbum = remember(playerState.current, recent) {
-        val song = playerState.current
-        val albumId = song?.albumId
-        when {
-            albumId != null -> recent.firstOrNull { it.id == albumId }
-                ?: AlbumID3(
-                    id = albumId,
-                    name = song?.album.orEmpty().ifBlank { "Album" },
-                    artist = song?.artist,
-                    artistId = song?.artistId,
-                    coverArt = song?.coverArt,
-                )
-            else -> recent.firstOrNull()
-        }
-    }
-
     fun playGenre(genre: Genre) {
         scope.launch {
             val songs = suspendRunCatching { client.getSongsByGenre(genre.value, 80) }.getOrDefault(emptyList())
@@ -174,7 +157,7 @@ fun HomeScreen(
                 Text("Downloads — listen offline", color = p.onBackground)
             }
 
-            // 1. Your playlists — large cards; no “For you”
+            // Your playlists
             SectionHeader("Your playlists")
             if (playlists.isEmpty() && !loading) {
                 Text(
@@ -183,39 +166,26 @@ fun HomeScreen(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
             } else {
-                val playlistState = rememberLazyListState()
-                LazyRow(
-                    state = playlistState,
-                    flingBehavior = rememberSnapFlingBehavior(lazyListState = playlistState),
-                    contentPadding = PaddingValues(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(playlists, key = { it.id }) { pl ->
-                        PlaylistCard(pl, onClick = { onPlaylist(pl.id) }, width = 176.dp)
+                    playlists.forEach { playlist ->
+                        PlaylistChip(playlist, onClick = { onPlaylist(playlist.id) })
                     }
                 }
             }
             Spacer(Modifier.height(18.dp))
 
-            // 2. Continue — one album from LocalPlayer / recent
-            val currentSong = playerState.current
-            if (currentSong != null && continueAlbum != null) {
-                SectionHeader(
-                    "Continue",
-                    onClick = if (playerState.isPlaying) null else ({ player.playPause() }),
-                )
-                HorizontalAlbums(listOf(continueAlbum)) { onAlbum(it.id) }
-                Spacer(Modifier.height(18.dp))
-            }
-
-            // 3. Recently played albums
+            // Recently played albums
             if (recent.isNotEmpty()) {
                 SectionHeader("Recently played")
                 HorizontalAlbums(recent) { onAlbum(it.id) }
                 Spacer(Modifier.height(18.dp))
             }
 
-            // 4. Recently added albums — dedicated
+            // Recently added albums
             if (newest.isNotEmpty()) {
                 SectionHeader("Recently added albums", onClick = onAlbums)
                 HorizontalAlbums(newest) { onAlbum(it.id) }
@@ -224,7 +194,7 @@ fun HomeScreen(
                 SectionHeader("Albums", onClick = onAlbums)
             }
 
-            // 5. Favorite tracks — compact
+            // Favorite tracks
             if (favorites.isNotEmpty()) {
                 SectionHeader("Favorite tracks", onClick = onFavorites)
                 favorites.take(5).forEachIndexed { i, song ->
@@ -237,7 +207,7 @@ fun HomeScreen(
                 Spacer(Modifier.height(18.dp))
             }
 
-            // 6. Artists in rotation — circular tiles (not mix orbs)
+            // Artists in rotation
             if (recentArtists.isNotEmpty()) {
                 SectionHeader("Artists in rotation")
                 val artistState = rememberLazyListState()
@@ -256,7 +226,7 @@ fun HomeScreen(
                 Spacer(Modifier.height(18.dp))
             }
 
-            // 7. Genres
+            // Genres
             if (genres.isNotEmpty()) {
                 SectionHeader("Genres")
                 FlowRow(

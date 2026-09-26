@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.9 — 2026-09-26
+
+### Changed
+- Show Home playlists as text chips, so playlists without uploaded artwork remain easy to browse. Remove the redundant Continue shelf.
+- Add real device screenshots and refreshed installation, feature, and build guidance to the README.
+
+### Fixed
+- Shuffle the full active queue with the playing song first while preserving duplicate entries, playback position, and the current audio stream.
+- Make Queue open reliably with an upward swipe, close smoothly with a fast downward swipe, and remain available for the next gesture.
+
+### Validation
+- 72 unit tests passed; Android lint reported no errors. The signed release APK was verified against the 1.3.8 certificate and installed over an existing Galaxy Z Fold 6 build. Home, playback, Queue gestures, and playlist navigation were checked on-device.
+
 ## 1.3.8 — 2026-09-25
 
 ### Changed

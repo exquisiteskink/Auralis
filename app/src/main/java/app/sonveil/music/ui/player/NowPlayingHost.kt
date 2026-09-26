@@ -120,7 +120,6 @@ fun NowPlayingHost(
             // Softer settle than MediumLow — less abrupt mini↔NP landings.
             snapAnimationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessLow),
             decayAnimationSpec = splineBasedDecay(density),
-            confirmValueChange = { target -> target != PlayerSheetValue.Queue || queueComposed },
         )
     }
 
@@ -140,6 +139,7 @@ fun NowPlayingHost(
                 .collect { offset ->
                     if (offset.isFinite()) {
                         sheet.floatValue = (1f - offset / heightPx).coerceIn(0f, 1f)
+                        if (offset < 0f) queueComposed = true
                     }
                 }
         }
@@ -154,9 +154,6 @@ fun NowPlayingHost(
         val handlesBack by remember(sheetState, heightPx) {
             derivedStateOf { sheetState.offset.isFinite() && sheetState.offset < heightPx * 0.8f }
         }
-        val playerDragEnabled by remember(sheetState, heightPx) {
-            derivedStateOf { !sheetState.offset.isFinite() || sheetState.offset > -heightPx * 0.35f }
-        }
         BackHandler(enabled = handlesBack) {
             val target = if (sheetState.offset < -heightPx * 0.35f) {
                 PlayerSheetValue.Player
@@ -168,19 +165,30 @@ fun NowPlayingHost(
 
         val queueDismiss = remember(sheetState) {
             object : NestedScrollConnection {
+                var downwardDragPx = 0f
+
                 override fun onPostScroll(
                     consumed: Offset,
                     available: Offset,
                     source: NestedScrollSource,
                 ): Offset {
                     if (available.y > 0f && sheetState.offset < 0f) {
-                        val consumed = sheetState.dispatchRawDelta(available.y)
+                        // Queue can close as far as Player, but this gesture must
+                        // never start collapsing the Now Playing screen.
+                        val consumed = sheetState.dispatchRawDelta(minOf(available.y, -sheetState.offset))
+                        downwardDragPx += consumed.coerceAtLeast(0f)
                         return Offset(0f, consumed)
                     }
                     return Offset.Zero
                 }
 
                 override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                    val shouldClose = downwardDragPx > with(density) { 48.dp.toPx() } && available.y >= 0f
+                    downwardDragPx = 0f
+                    if (shouldClose || (sheetState.offset >= 0f && sheetState.settledValue == PlayerSheetValue.Queue)) {
+                        sheetState.animateTo(PlayerSheetValue.Player)
+                        return Velocity(0f, available.y)
+                    }
                     if (sheetState.offset < 0f) {
                         val consumedY = sheetState.settle(available.y)
                         return Velocity(0f, consumedY)
@@ -213,9 +221,10 @@ fun NowPlayingHost(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationY = sheetState.offset.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: heightPx
+                    val offset = sheetState.offset.takeIf { it.isFinite() } ?: heightPx
+                    translationY = if (sheetState.settledValue == PlayerSheetValue.Queue) 0f else offset.coerceAtLeast(0f)
                 }
-                .anchoredDraggable(sheetState, Orientation.Vertical, enabled = playerDragEnabled),
+                .anchoredDraggable(sheetState, Orientation.Vertical, enabled = sheetState.settledValue != PlayerSheetValue.Queue),
         ) {
             UltraBlurBackground(Modifier.fillMaxSize())
             PositionAwareNowPlayingPage(
@@ -434,7 +443,16 @@ private fun NowPlayingPage(
             Spacer(Modifier.height(10.dp))
             ControlsDeck(ui)
             Spacer(Modifier.height(6.dp))
-            Box(Modifier.fillMaxWidth().height(10.dp).clickable(onClick = onOpenQueue))
+            Box(
+                Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onOpenQueue),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Up next · ${ui.upNext.size} songs",
+                    color = p.onBackground.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                )
+            }
             // Remaining flex only after controls so seek/details stay under art.
             Spacer(Modifier.weight(1f))
         }

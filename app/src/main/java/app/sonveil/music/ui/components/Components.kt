@@ -235,26 +235,6 @@ fun AlbumCard(
 }
 
 @Composable
-fun PlaylistCard(
-    playlist: Playlist,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    width: Dp = 148.dp,
-) {
-    val p = LocalPalette.current
-    Column(modifier.width(width).pressScale(onClick)) {
-        CoverArt(playlist.coverArt, Modifier.fillMaxWidth().aspectRatio(1f), playlist.name, corner = 6.dp)
-        Spacer(Modifier.height(8.dp))
-        Text(playlist.name, color = p.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-        Text(
-            "${playlist.songCount} tracks",
-            color = p.onBackground.copy(alpha = 0.55f),
-            fontSize = 12.sp,
-        )
-    }
-}
-
-@Composable
 fun ArtistTile(
     artist: ArtistID3,
     onClick: () -> Unit,
@@ -448,9 +428,19 @@ fun MixOrb(
 
 @Composable
 fun GenreChip(genre: Genre, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    LibraryChip(genre.value.ifBlank { "Genre" }, onClick, modifier)
+}
+
+@Composable
+fun PlaylistChip(playlist: Playlist, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    LibraryChip(playlist.name.ifBlank { "Playlist" }, onClick, modifier)
+}
+
+@Composable
+private fun LibraryChip(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val p = LocalPalette.current
     Text(
-        genre.value.ifBlank { "Genre" },
+        label,
         color = p.onBackground,
         fontWeight = FontWeight.Medium,
         fontSize = 13.sp,

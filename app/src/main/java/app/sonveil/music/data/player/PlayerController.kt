@@ -33,6 +33,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.CancellationException
 import com.google.common.util.concurrent.ListenableFuture
+import kotlin.random.Random
+
+internal fun <T> shuffledQueueFromCurrent(items: List<T>, currentIndex: Int, random: Random = Random.Default): List<T> {
+    if (currentIndex !in items.indices) return items
+    return listOf(items[currentIndex]) + items.filterIndexed { index, _ -> index != currentIndex }.shuffled(random)
+}
 
 data class PlayerUiState(
     val queue: List<Song> = emptyList(),
@@ -153,7 +159,11 @@ class PlayerController(
     }
 
     fun play(songs: List<Song>, startIndex: Int = 0) {
-        setQueue(songs, startIndex, autoPlay = true)
+        if (_state.value.shuffle && songs.isNotEmpty()) {
+            setQueue(shuffledQueueFromCurrent(songs, startIndex.coerceIn(0, songs.lastIndex)), 0, autoPlay = true)
+        } else {
+            setQueue(songs, startIndex, autoPlay = true)
+        }
     }
 
     private fun setQueue(
@@ -415,8 +425,29 @@ class PlayerController(
 
     fun toggleShuffle() {
         val c = controller ?: return
-        c.shuffleModeEnabled = !c.shuffleModeEnabled
-        _state.update { it.copy(shuffle = c.shuffleModeEnabled) }
+        val st = _state.value
+        if (st.shuffle) {
+            _state.update { it.copy(shuffle = false) }
+        } else {
+            if (st.queue.isEmpty() || c.mediaItemCount != st.queue.size) return
+            val index = c.currentMediaItemIndex.takeIf { it in st.queue.indices } ?: st.index
+            val mediaItems = (st.queue.indices).map(c::getMediaItemAt)
+            val order = shuffledQueueFromCurrent(st.queue.indices.toList(), index)
+            val shuffled = order.map(st.queue::get)
+            // Moving the current item keeps its playback stream and position intact.
+            // Replacing only the following items leaves the current item playing.
+            c.shuffleModeEnabled = false
+            if (index != 0) {
+                val moved = st.queue.toMutableList().apply { add(0, removeAt(index)) }
+                _state.update { it.copy(queue = moved, index = 0, shuffle = true, upcomingIndices = null) }
+                c.moveMediaItem(index, 0)
+            }
+            _state.update {
+                it.copy(queue = shuffled, index = 0, shuffle = true, upcomingIndices = null)
+            }
+            c.replaceMediaItems(1, c.mediaItemCount, order.drop(1).map(mediaItems::get))
+            syncFromPlayer()
+        }
         persistQueue(force = true)
     }
 
@@ -610,7 +641,7 @@ class PlayerController(
                 positionMs = if (preserveRestoredState) it.positionMs else c.currentPosition.coerceAtLeast(0L),
                 durationMs = c.duration.takeIf { d -> d > 0 } ?: (it.queue.getOrNull(idx)?.duration?.times(1000L) ?: 0L),
                 repeatMode = if (preserveRestoredState) it.repeatMode else c.repeatMode,
-                shuffle = if (preserveRestoredState) it.shuffle else c.shuffleModeEnabled,
+                shuffle = it.shuffle,
                 upcomingIndices = upcoming,
             )
         }
@@ -737,7 +768,7 @@ class PlayerController(
     private fun applyPendingRestoredPlayback(player: Player): Boolean {
         val restored = pendingRestoredPlayback ?: return true
         if (player.mediaItemCount == 0) return false
-        player.shuffleModeEnabled = restored.shuffle
+        player.shuffleModeEnabled = false
         player.repeatMode = restored.repeatMode
         _state.update {
             it.copy(
@@ -757,7 +788,7 @@ class PlayerController(
 
     private fun applyShuffleAndRepeat(shuffle: Boolean, repeatMode: Int) {
         val c = controller ?: return
-        c.shuffleModeEnabled = shuffle
+        c.shuffleModeEnabled = false
         c.repeatMode = repeatMode
         _state.update { it.copy(shuffle = shuffle, repeatMode = repeatMode) }
     }
@@ -777,7 +808,7 @@ class PlayerController(
             index = st.index,
             positionMs = (c?.currentPosition ?: st.positionMs).coerceAtLeast(0L),
             playWhenReady = c?.playWhenReady ?: st.isPlaying,
-            shuffle = c?.shuffleModeEnabled ?: st.shuffle,
+            shuffle = st.shuffle,
             repeatMode = c?.repeatMode ?: st.repeatMode,
         )
         queueWriter.submit(snap)
